@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Save, X, Settings } from 'lucide-react';
 import { calculatePartyBalance } from './billingUtils.js';
+import { roundCurrency } from './lib/money.js';
 
 export default function PaymentInBuilder({ advancedDraft, onClose, onSave, customers, userDetails, bills, billPayments }) {
   const isEditing = Boolean(advancedDraft?.id);
@@ -53,7 +54,7 @@ export default function PaymentInBuilder({ advancedDraft, onClose, onSave, custo
     }
     const discountAmt = Math.max(0, Number(discount) || 0);
     // Ledger settlement = cash received + discount waived (both reduce outstanding balance)
-    const settledAmount = Math.round((Number(amountReceived) + discountAmt) * 100) / 100;
+    const settledAmount = roundCurrency(Number(amountReceived) + discountAmt);
     const payload = {
       ...advancedDraft,
       customer: customerInfo.name,
