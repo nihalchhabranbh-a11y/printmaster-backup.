@@ -156,6 +156,12 @@ export const db = {
     return { ...data, createdAt: data.created_at };
   },
 
+  async updateOrgAdminPassword(id, password) {
+    const hashedPassword = await hashPasswordForStorage(password);
+    const { error } = await supabase.from("org_admins").update({ password: hashedPassword }).eq("id", id);
+    if (error) console.error("updateOrgAdminPassword:", error.message);
+  },
+
   async approveOrganisation(id) {
     const { error } = await supabase.from("organisations").update({ status: "approved" }).eq("id", id);
     if (error) console.error("approveOrganisation:", error.message);
@@ -201,7 +207,7 @@ export const db = {
   },
 
   async getOrgAdmins(organisationId) {
-    const { data, error } = await supabase.from("org_admins").select("*").eq("organisation_id", organisationId);
+    const { data, error } = await supabase.from("org_admins").select("id, username, name, email, organisation_id, created_at").eq("organisation_id", organisationId);
     if (error) {
       console.error("getOrgAdmins:", error.message);
       return [];
@@ -221,6 +227,7 @@ export const db = {
 
   // BILLS
   async getBills(organisationId) {
+    if (!organisationId) { console.warn("getBills: organisationId required"); return []; }
     let q = supabase.from("bills").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -388,6 +395,7 @@ export const db = {
 
   // BILL PAYMENTS (per-payment records for partial payments & method tracking)
   async getBillPayments(organisationId) {
+    if (!organisationId) { console.warn("getBillPayments: organisationId required"); return []; }
     let q = supabase.from("bill_payments").select("*").order("paid_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -447,6 +455,7 @@ export const db = {
 
   // PURCHASES
   async getPurchases(organisationId) {
+    if (!organisationId) { console.warn("getPurchases: organisationId required"); return []; }
     let q = supabase.from("purchases").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -558,6 +567,7 @@ export const db = {
 
   // TASKS
   async getTasks(organisationId) {
+    if (!organisationId) { console.warn("getTasks: organisationId required"); return []; }
     let q = supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -650,6 +660,7 @@ export const db = {
 
   // CUSTOMERS
   async getCustomers(organisationId) {
+    if (!organisationId) { console.warn("getCustomers: organisationId required"); return []; }
     let q = supabase.from("customers").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -722,6 +733,7 @@ export const db = {
 
   // PRODUCTS / SERVICES
   async getProducts(organisationId) {
+    if (!organisationId) { console.warn("getProducts: organisationId required"); return []; }
     let q = supabase.from("products").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1005,6 +1017,7 @@ export const db = {
   // WORKERS — uuid primary key (gen_random_uuid()) in DB
   async getWorkers(organisationId) {
     // Exclude password column — hashed values have no use on the client
+    if (!organisationId) { console.warn("getWorkers: organisationId required"); return []; }
     let q = supabase.from("workers").select("id, name, username, role, phone, salary_type, salary_amount, salary_cycle, opening_balance, organisation_id, created_at");
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1137,6 +1150,7 @@ export const db = {
   // VENDORS
   async getVendors(organisationId) {
     // Exclude password column — hashed values have no use on the client
+    if (!organisationId) { console.warn("getVendors: organisationId required"); return []; }
     let q = supabase.from("vendors").select("id, name, firm_name, username, phone, email, organisation_id, created_at").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1190,6 +1204,7 @@ export const db = {
 
   // VENDOR BILLS (bills FROM vendors TO our company)
   async getVendorBills(organisationId) {
+    if (!organisationId) { console.warn("getVendorBills: organisationId required"); return []; }
     let q = supabase.from("vendor_bills").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1269,6 +1284,7 @@ export const db = {
 
   // VENDOR PAYMENTS (what we pay to vendors)
   async getVendorPayments(organisationId) {
+    if (!organisationId) { console.warn("getVendorPayments: organisationId required"); return []; }
     let q = supabase.from("vendor_payments").select("*").order("paid_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;

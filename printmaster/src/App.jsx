@@ -1257,21 +1257,41 @@ export default function App() {
 
   // Restore logged-in user from localStorage (so refresh doesn't log out)
   useEffect(() => {
-    try {
-      // Clean up legacy admin password key if present
-      localStorage.removeItem("pm_admin_password");
+    (async () => {
+      try {
+        // Clean up legacy admin password key if present
+        localStorage.removeItem("pm_admin_password");
 
-      const raw = localStorage.getItem("pm_user");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.username && parsed.role) {
-          setUser(parsed);
-          setPage(defaultPageForRole(parsed.role, parsed.organisationId ?? null));
+        const raw = localStorage.getItem("pm_user");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.username && parsed.role) {
+            // Re-validate session: ensure the org is still approved and accessible
+            let valid = true;
+            if (parsed.organisationId) {
+              try {
+                const { data: org } = await supabase
+                  .from("organisations")
+                  .select("id, status, access_enabled")
+                  .eq("id", parsed.organisationId)
+                  .eq("status", "approved")
+                  .eq("access_enabled", true)
+                  .maybeSingle();
+                valid = !!org;
+              } catch { /* Network error — allow cached session for offline tolerance */ }
+            }
+            if (valid) {
+              setUser(parsed);
+              setPage(defaultPageForRole(parsed.role, parsed.organisationId ?? null));
+            } else {
+              localStorage.removeItem("pm_user");
+            }
+          }
         }
+      } catch (e) {
+        console.error("restoreUser:", e);
       }
-    } catch (e) {
-      console.error("restoreUser:", e);
-    }
+    })();
   }, []);
 
   // Allow Login to show even if DB is slow
@@ -1610,7 +1630,7 @@ export default function App() {
         <style>{CSS}</style>
         <LoginPage
           brand={brand}
-          adminPassword={adminPassword}
+          adminPassword={undefined}
           onLogin={u => {
             const simpleUser = { id: u.id, name: u.name, role: u.role, username: u.username, organisationId: u.organisationId ?? null };
             setUser(simpleUser);
@@ -1645,7 +1665,7 @@ export default function App() {
     "ai-agent": <AiAgentPage products={products} bills={bills} customers={customers} showToast={showToast} setBills={setBills} sellerName={user?.name} setPage={setPage} setInitialDraft={setInitialDraft} user={user} />,
     "org-approvals": <OrgApprovalsPage organisations={organisations} onRefresh={refreshOrganisations} showToast={showToast} />,
     admin: <AdminPanel bills={bills} tasks={tasks} workers={workers} vendors={vendors} vendorBills={vendorBills} />,
-    settings: <SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} adminPassword={adminPassword} changeAdminPassword={changeAdminPassword} workers={workers} setWorkers={setWorkers} user={user} />,
+    settings: <SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} workers={workers} setWorkers={setWorkers} user={user} />,
     "worker-dashboard": <WorkerDashboard tasks={tasks} user={user} />,
     "worker-tasks": <WorkerTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} />,
     "vendor-dashboard": <VendorDashboard tasks={tasks} user={user} vendorBills={vendorBills} />,
@@ -2011,7 +2031,7 @@ export default function App() {
 }
 
 // ── Login (single page for everyone) ──────────────────────────────────────────
-function LoginPage({ brand, adminPassword, onLogin }) {
+function LoginPage({ brand, onLogin }) {
   const [mode, setMode] = useState("username"); // username | email
   const [form, setForm] = useState({ username: "", password: "" });
   const [emailAuth, setEmailAuth] = useState({ email: "", otp: "", step: "enterEmail" }); // enterEmail | enterOtp
@@ -2558,30 +2578,39 @@ function DashboardPage({ bills, tasks, workers, vendors, billPayments, totalReve
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-function SettingsPage({ brand, setBrand, showToast, adminPassword, changeAdminPassword, workers, setWorkers, user }) {
+function SettingsPage({ brand, setBrand, showToast, workers, setWorkers, user }) {
   const [f, setF] = useState({ ...brand });
   useEffect(() => { setF({ ...brand }); }, [brand]);
   const logoRef = useRef(); const qrRef = useRef(); const a4PreviewRef = useRef(null);
   const bgImageRef = useRef();
   const [passForm, setPassForm] = useState({ current:"", newPass:"", confirm:"" });
   const [passErr, setPassErr] = useState("");
+  const [passLoading, setPassLoading] = useState(false);
 
   const changeMyPassword = async () => {
     setPassErr("");
     if (!passForm.current || !passForm.newPass || !passForm.confirm) return setPassErr("All fields required.");
     if (passForm.newPass !== passForm.confirm) return setPassErr("New passwords don't match.");
     if (passForm.newPass.length < 4) return setPassErr("Password must be at least 4 characters.");
-    if (user.role === "admin") {
-      if (passForm.current !== adminPassword) return setPassErr("Current password is incorrect.");
-      changeAdminPassword(passForm.newPass);
-    } else {
-      const worker = workers.find(w => w.id === user.id);
-      if (!worker || passForm.current !== worker.password) return setPassErr("Current password is incorrect.");
-      await db.updateWorkerPassword(user.id, passForm.newPass);
-      setWorkers(ws => ws.map(w => w.id === user.id ? {...w, password: passForm.newPass} : w));
+    setPassLoading(true);
+    try {
+      // Verify current password via server-side auth (no plaintext comparison on client)
+      const verified = await db.loginWithCredentials(user.username, passForm.current);
+      if (!verified) { setPassErr("Current password is incorrect."); return; }
+      // Update password in the correct table based on role
+      if (user.role === "admin") {
+        await db.updateOrgAdminPassword(user.id, passForm.newPass);
+      } else {
+        await db.updateWorkerPassword(user.id, passForm.newPass);
+      }
+      setPassForm({ current: "", newPass: "", confirm: "" });
+      showToast("✅ Password changed successfully!");
+    } catch (e) {
+      setPassErr("Failed to change password. Try again.");
+      console.error("changeMyPassword:", e);
+    } finally {
+      setPassLoading(false);
     }
-    setPassForm({ current:"", newPass:"", confirm:"" });
-    showToast("✅ Password changed successfully!");
   };
 
   const handleLogo = async (e) => { const file = e.target.files[0]; if (!file) return; setF(x => ({ ...x, logo: null })); const b64 = await readFile64(file); setF(x => ({ ...x, logo: b64 })); };
