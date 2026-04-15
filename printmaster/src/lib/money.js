@@ -13,7 +13,10 @@
  * @param {number} n
  * @returns {number}
  */
-export const roundCurrency = (n) => Math.round((Number(n) || 0) * 100) / 100;
+export const roundCurrency = (n) => {
+  const val = (Number(n) || 0) * 100;
+  return Math.sign(val) * Math.round(Math.abs(val)) / 100;
+};
 
 /**
  * Safe addition — rounds after adding to prevent drift.
