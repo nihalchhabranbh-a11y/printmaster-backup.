@@ -391,6 +391,7 @@ export const db = {
     } else {
       console.log("[Supabase] DELETE bill → ok", { id });
     }
+    return error || null; // Task 3.3 – return error so callers can detect failures
   },
 
   // BILL PAYMENTS (per-payment records for partial payments & method tracking)
@@ -1073,6 +1074,7 @@ export const db = {
     } else {
       console.log("[Supabase] DELETE worker → ok", { id });
     }
+    return error || null; // Task 3.3 – return error so callers can detect failures
   },
 
   async updateWorkerPassword(id, password) {

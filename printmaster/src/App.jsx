@@ -16,6 +16,10 @@ import PaymentInBuilder from "./PaymentInBuilder.jsx";
 import LiveAlertsPage from "./LiveAlertsPage.jsx";
 import StaffPage from "./StaffPage.jsx";
 import VoiceAssistant from "./VoiceAssistant.jsx";
+// Task 5.1 – Thin context layer
+import { AppProvider } from "./contexts/AppContext.jsx";
+// Task 5.4 – Per-page error isolation
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
 
 // ── Default brand/settings (hard-coded for live use) ─────────────────────────
@@ -128,9 +132,21 @@ const getInvoiceWhatsAppUrl = ({ bill, brand, billPayments = [] }) => {
   return `https://wa.me/${target}?text=${encodeURIComponent(msg)}`;
 };
 
+// Task 4.3 – Shared AudioContext (one per page) so we don't leak a new
+// AudioContext object on every sound playback.
+let _sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!_sharedAudioCtx || _sharedAudioCtx.state === "closed") {
+    _sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // Resume if suspended (browser autoplay policy)
+  if (_sharedAudioCtx.state === "suspended") _sharedAudioCtx.resume();
+  return _sharedAudioCtx;
+}
+
 export const playAlertSound = () => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = getAudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -146,7 +162,7 @@ export const playAlertSound = () => {
 
 export const playSuccessSound = () => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = getAudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -1304,12 +1320,14 @@ export default function App() {
   // Load data when user is set (org-scoped for org users, organisations only for Super Admin)
   useEffect(() => {
     if (!user) return;
+    let isMounted = true; // Task 3.5 – prevent state updates after unmount
     const orgId = user.organisationId ?? null;
     async function loadAll() {
       setDbLoading(true);
       if (orgId === null) {
         // Super Admin: only load organisations for approvals panel
         const orgs = await db.getOrganisations();
+        if (!isMounted) return;
         setOrganisations(orgs || []);
         setBills([]);
         setPurchases([]);
@@ -1335,6 +1353,7 @@ export default function App() {
           db.loadBrand(DEFAULT_BRAND, orgId),
           db.getProducts(orgId),
         ]);
+        if (!isMounted) return; // Task 3.5 – bail if user changed while loading
         setBills(b);
         setPurchases(p);
         setBillPayments(bp || []);
@@ -1377,11 +1396,17 @@ export default function App() {
       setDbLoading(false);
     }
     loadAll();
+    return () => { isMounted = false; }; // Task 3.5 – cleanup
   }, [user?.id, user?.organisationId]);
 
 
   const showToast = (msg, type = "success") => setToast({ msg, type });
-  const addNotification = (msg) => setNotifications(n => [{ id: Date.now(), msg, read: false, time: now() }, ...n]);
+  const addNotification = (msg) => setNotifications(n => {
+    // Task 4.5 – cap the array at 100 entries so memory never grows unboundedly
+    const MAX_NOTIFICATIONS = 100;
+    const updated = [{ id: Date.now(), msg, read: false, time: now() }, ...n];
+    return updated.length > MAX_NOTIFICATIONS ? updated.slice(0, MAX_NOTIFICATIONS) : updated;
+  });
 
   // Smart automatic notifications (overdue bills, tasks due soon, today's summary)
   const hasRunSmartNotify = useRef(false);
@@ -1649,33 +1674,35 @@ export default function App() {
     );
   }
 
+  // Task 5.4 – Each page is isolated in its own ErrorBoundary so a crash in one
+  // view cannot take down the entire application shell.
   const pages = {
-    dashboard: <ShopDashboard bills={bills} tasks={tasks} workers={workers} vendors={vendors} billPayments={billPayments} totalRevenue={totalRevenue} totalPending={totalPending} paidBills={paidBills} unpaidBills={unpaidBills} pendingTasks={pendingTasks} completedTasks={completedTasks} setPage={setPage} brand={brand} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} />,
-    "live-alerts": <LiveAlertsPage tasks={tasks} products={products} bills={bills} billPayments={billPayments} onViewCustomer={(c) => { setJumpToCustomer(c); setPage("customers"); }} onNavigate={setPage} />,
-    billing: <SimpleBillingPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} customers={customers} setCustomers={setCustomers} brand={brand} setBrand={setBrand} user={user} products={products} initialDraft={initialDraft} setInitialDraft={setInitialDraft} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} />,
-    products: <EnhancedProductsPage products={products} setProducts={setProducts} showToast={showToast} user={user} />,
-    tasks: <TasksPage tasks={tasks} setTasks={setTasks} workers={workers} vendors={vendors} user={user} showToast={showToast} addNotification={addNotification} />,
-    workers: <StaffPage workers={workers} vendors={vendors} setWorkers={setWorkers} tasks={tasks} showToast={showToast} user={user} />,
-    vendors: <VendorsPage vendors={vendors} workers={workers} setVendors={setVendors} vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} showToast={showToast} brand={brand} user={user} />,
-    payments: <PaymentsPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} user={user} />,
-    purchases: <PurchasesPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} />,
-    "posted-bills": <PostedBillsPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} />,
-    customers: <EnhancedCustomersPage customers={customers} setCustomers={setCustomers} bills={bills} billPayments={billPayments} showToast={showToast} user={user} setAdvancedDraft={setAdvancedDraft} onViewInvoice={setViewingInvoiceId} jumpToCustomer={jumpToCustomer} setJumpToCustomer={setJumpToCustomer} />,
-    reports: <ReportsPage bills={bills} customers={customers} tasks={tasks} />,
-    "ai-agent": <AiAgentPage products={products} bills={bills} customers={customers} showToast={showToast} setBills={setBills} sellerName={user?.name} setPage={setPage} setInitialDraft={setInitialDraft} user={user} />,
-    "org-approvals": <OrgApprovalsPage organisations={organisations} onRefresh={refreshOrganisations} showToast={showToast} />,
-    admin: <AdminPanel bills={bills} tasks={tasks} workers={workers} vendors={vendors} vendorBills={vendorBills} />,
-    settings: <SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} workers={workers} setWorkers={setWorkers} user={user} />,
-    "worker-dashboard": <WorkerDashboard tasks={tasks} user={user} />,
-    "worker-tasks": <WorkerTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} />,
-    "vendor-dashboard": <VendorDashboard tasks={tasks} user={user} vendorBills={vendorBills} />,
-    "vendor-tasks": <VendorTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} />,
-    "vendor-bills": <VendorBillsPage vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} user={user} showToast={showToast} brand={brand} />,
-    "gst-suite": <GstSuitePage setPage={setPage} />,
-    "gst-finder": <GstFinderPage user={user} showToast={showToast} />,
-    "e-invoice": <EInvoicePage bills={bills} user={user} showToast={showToast} />,
-    "e-waybill": <EWayBillPage bills={bills} user={user} showToast={showToast} />,
-    "gst-filing": <GstFilingPage bills={bills} user={user} showToast={showToast} />,
+    dashboard: <ErrorBoundary name="Dashboard"><ShopDashboard bills={bills} tasks={tasks} workers={workers} vendors={vendors} billPayments={billPayments} totalRevenue={totalRevenue} totalPending={totalPending} paidBills={paidBills} unpaidBills={unpaidBills} pendingTasks={pendingTasks} completedTasks={completedTasks} setPage={setPage} brand={brand} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} /></ErrorBoundary>,
+    "live-alerts": <ErrorBoundary name="Live Alerts"><LiveAlertsPage tasks={tasks} products={products} bills={bills} billPayments={billPayments} onViewCustomer={(c) => { setJumpToCustomer(c); setPage("customers"); }} onNavigate={setPage} /></ErrorBoundary>,
+    billing: <ErrorBoundary name="Billing"><SimpleBillingPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} customers={customers} setCustomers={setCustomers} brand={brand} setBrand={setBrand} user={user} products={products} initialDraft={initialDraft} setInitialDraft={setInitialDraft} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} /></ErrorBoundary>,
+    products: <ErrorBoundary name="Products"><EnhancedProductsPage products={products} setProducts={setProducts} showToast={showToast} user={user} /></ErrorBoundary>,
+    tasks: <ErrorBoundary name="Tasks"><TasksPage tasks={tasks} setTasks={setTasks} workers={workers} vendors={vendors} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    workers: <ErrorBoundary name="Staff"><StaffPage workers={workers} vendors={vendors} setWorkers={setWorkers} tasks={tasks} showToast={showToast} user={user} /></ErrorBoundary>,
+    vendors: <ErrorBoundary name="Vendors"><VendorsPage vendors={vendors} workers={workers} setVendors={setVendors} vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} showToast={showToast} brand={brand} user={user} /></ErrorBoundary>,
+    payments: <ErrorBoundary name="Payments"><PaymentsPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} user={user} /></ErrorBoundary>,
+    purchases: <ErrorBoundary name="Purchases"><PurchasesPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} /></ErrorBoundary>,
+    "posted-bills": <ErrorBoundary name="Posted Bills"><PostedBillsPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} /></ErrorBoundary>,
+    customers: <ErrorBoundary name="Customers"><EnhancedCustomersPage customers={customers} setCustomers={setCustomers} bills={bills} billPayments={billPayments} showToast={showToast} user={user} setAdvancedDraft={setAdvancedDraft} onViewInvoice={setViewingInvoiceId} jumpToCustomer={jumpToCustomer} setJumpToCustomer={setJumpToCustomer} /></ErrorBoundary>,
+    reports: <ErrorBoundary name="Reports"><ReportsPage bills={bills} customers={customers} tasks={tasks} /></ErrorBoundary>,
+    "ai-agent": <ErrorBoundary name="AI Agent"><AiAgentPage products={products} bills={bills} customers={customers} showToast={showToast} setBills={setBills} sellerName={user?.name} setPage={setPage} setInitialDraft={setInitialDraft} user={user} /></ErrorBoundary>,
+    "org-approvals": <ErrorBoundary name="Org Approvals"><OrgApprovalsPage organisations={organisations} onRefresh={refreshOrganisations} showToast={showToast} /></ErrorBoundary>,
+    admin: <ErrorBoundary name="Admin"><AdminPanel bills={bills} tasks={tasks} workers={workers} vendors={vendors} vendorBills={vendorBills} /></ErrorBoundary>,
+    settings: <ErrorBoundary name="Settings"><SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} workers={workers} setWorkers={setWorkers} user={user} /></ErrorBoundary>,
+    "worker-dashboard": <ErrorBoundary name="Worker Dashboard"><WorkerDashboard tasks={tasks} user={user} /></ErrorBoundary>,
+    "worker-tasks": <ErrorBoundary name="Worker Tasks"><WorkerTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    "vendor-dashboard": <ErrorBoundary name="Vendor Dashboard"><VendorDashboard tasks={tasks} user={user} vendorBills={vendorBills} /></ErrorBoundary>,
+    "vendor-tasks": <ErrorBoundary name="Vendor Tasks"><VendorTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    "vendor-bills": <ErrorBoundary name="Vendor Bills"><VendorBillsPage vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} user={user} showToast={showToast} brand={brand} /></ErrorBoundary>,
+    "gst-suite": <ErrorBoundary name="GST Suite"><GstSuitePage setPage={setPage} /></ErrorBoundary>,
+    "gst-finder": <ErrorBoundary name="GST Finder"><GstFinderPage user={user} showToast={showToast} /></ErrorBoundary>,
+    "e-invoice": <ErrorBoundary name="E-Invoice"><EInvoicePage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
+    "e-waybill": <ErrorBoundary name="E-Way Bill"><EWayBillPage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
+    "gst-filing": <ErrorBoundary name="GST Filing"><GstFilingPage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
   };
 
   const titles = { dashboard:"Dashboard", "live-alerts":"Live Alerts 🐒", billing:"Billing", products:"Products / Services", "ai-agent":"🤖 AI Agent", tasks:"Task Management", workers:"Staff & Payroll", vendors:"Vendors", payments:"Payments", purchases:"Purchases", "posted-bills":"Posted Bills", customers:"Customers", reports:"Revenue Reports", "org-approvals":"Org Approvals", admin:"Admin Panel", settings:"Settings", "worker-dashboard":"My Dashboard", "worker-tasks":"My Tasks", "vendor-dashboard":"Vendor Dashboard", "vendor-tasks":"My Tasks", "vendor-bills":"Create Bill", "gst-suite":"💼 GST Suite", "gst-finder":"🔍 GST Finder", "e-invoice":"🧾 E-Invoice Generator", "e-waybill":"🚛 E-Way Bill", "gst-filing":"📊 GST Filing" };
@@ -1710,7 +1737,13 @@ export default function App() {
     return parts.join('');
   })();
 
+  // Task 5.1 – Context values passed to AppProvider so descendant components
+  // can opt-in to useAuth() / useData() without needing these props drilled down.
+  const authValue = { user, setUser, page, setPage, dark, setDark, showToast, notifications, setNotifications, dbLoading };
+  const dataValue = { bills, setBills, customers, setCustomers, workers, setWorkers, vendors, setVendors, tasks, setTasks, purchases, setPurchases, products, setProducts, vendorBills, setVendorBills, billPayments, setBillPayments, vendorPayments, setVendorPayments, organisations, setOrganisations, brand, setBrand };
+
   return (
+    <AppProvider auth={authValue} data={dataValue}>
     <><style>{CSS}</style>{appearanceStyle && <style>{appearanceStyle}</style>}
       <div className="app-layout">
         {sidebarOpen && <div className="s-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -1861,7 +1894,7 @@ export default function App() {
           </div>
         </div>
       </div>
-      
+      {/* ── Global Overlays: modals, toasts, voice assistant ── */}
       {advancedDraft?.docType && (
         (advancedDraft.docType === "Payment In" || advancedDraft.doc_type === "Payment In") ? (
            <PaymentInBuilder
@@ -2026,7 +2059,8 @@ export default function App() {
           }
         }}
       />
-    </>
+      </>
+    </AppProvider>
   );
 }
 

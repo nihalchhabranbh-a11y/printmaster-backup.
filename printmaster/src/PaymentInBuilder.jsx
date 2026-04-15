@@ -20,6 +20,7 @@ export default function PaymentInBuilder({ advancedDraft, onClose, onSave, custo
 
   // Calculate Party Balance (this is simplified, ideally we'd pass in full ledger calculating function, but we can do a rough calculation here based on bills)
   const [partyBalance, setPartyBalance] = useState(0);
+  const [isSaving, setIsSaving] = useState(false); // Task 3.1 – double-submit guard
 
   useEffect(() => {
     if (selectedPartyName) {
@@ -44,28 +45,40 @@ export default function PaymentInBuilder({ advancedDraft, onClose, onSave, custo
     }
   }, [selectedPartyName, customers, bills, billPayments]);
 
-  const handleSave = () => {
+  const handleSave = async () => { // Task 3.1 – async to support isSaving guard
+    if (isSaving) return;
     if (!amountReceived || Number(amountReceived) <= 0) {
       alert("Please enter a valid amount received.");
       return;
     }
+    const discountAmt = Math.max(0, Number(discount) || 0);
+    // Ledger settlement = cash received + discount waived (both reduce outstanding balance)
+    const settledAmount = Math.round((Number(amountReceived) + discountAmt) * 100) / 100;
     const payload = {
       ...advancedDraft,
       customer: customerInfo.name,
       phone: customerInfo.phone,
       email: customerInfo.email,
-      total: Number(amountReceived),
-      discount: discount ? Number(discount) : 0,
+      // total drives FIFO allocation — must equal full amount settled
+      total: settledAmount,
+      // Store components separately for accurate reports
+      amountReceived: Number(amountReceived),
+      discount: discountAmt,
       createdAt: new Date(date).toISOString(),
       docType: "Payment In",
       doc_type: "Payment In",
-      terms: paymentMode, // using terms field to store payment mode
+      terms: paymentMode,
       desc: notes,
       invoiceType: "Payment In",
       status: "Closed",
       id: isEditing ? advancedDraft.id : `${prefix}${number}`
     };
-    onSave(payload);
+    setIsSaving(true);
+    try {
+      await onSave(payload);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const currentBalanceColor = partyBalance > 0 ? '#ef4444' : partyBalance < 0 ? '#10b981' : '#6b7280';
@@ -91,8 +104,8 @@ export default function PaymentInBuilder({ advancedDraft, onClose, onSave, custo
           <button onClick={onClose} style={{ height: "36px", padding: "0 16px", background: "white", border: "1px solid #d1d5db", borderRadius: "6px", fontSize: "14px", fontWeight: "500", color: "#6b7280", cursor: "pointer" }}>
             Cancel
           </button>
-          <button onClick={handleSave} style={{ height: "36px", padding: "0 20px", background: "#4f46e5", border: "none", borderRadius: "6px", display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", fontWeight: "500", color: "white", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
-            <Save size={16} /> Save
+          <button onClick={handleSave} disabled={isSaving} style={{ height: "36px", padding: "0 20px", background: isSaving ? "#818cf8" : "#4f46e5", border: "none", borderRadius: "6px", display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", fontWeight: "500", color: "white", cursor: isSaving ? "not-allowed" : "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
+            <Save size={16} /> {isSaving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
