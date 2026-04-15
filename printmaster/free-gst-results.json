@@ -1,0 +1,17 @@
+[
+  {
+    "name": "gst.gov.in",
+    "status": 200,
+    "body": "<html><head><title>Request Rejected</title></head><body>The requested URL was rejected. Please consult with your administrator.<br><br>Your support ID is: <12966289634682675880><br><br><a href='javascript:history.back();'>[Go Back]</body></html>"
+  },
+  {
+    "name": "mastersindia",
+    "status": 200,
+    "body": "{\"error\":true,\"message\":\"paramter missing\"}"
+  },
+  {
+    "name": "appyflow",
+    "status": 200,
+    "body": "{\"error\":true,\"message\":\"key_secret required. Kindly check the key in request must be key_secret\",\"help\":\"Contact Team Appyflow at +91 85689 93655\"}"
+  }
+]

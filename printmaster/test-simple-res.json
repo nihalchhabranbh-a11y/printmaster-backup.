@@ -1,0 +1,12 @@
+[
+  {
+    "method": "simple-api-key",
+    "status": 401,
+    "body": "{\n    \"code\": 401,\n    \"message\": \"Unauthorized\",\n    \"timestamp\": 1774871771186,\n    \"transaction_id\": \"11d579bf-b435-4f20-bc71-53895de26ee9\"\n}"
+  },
+  {
+    "method": "2-step-bearer",
+    "status": 403,
+    "body": "{\n    \"code\": 403,\n    \"message\": \"Insufficient privilege\",\n    \"timestamp\": 1774871771452,\n    \"transaction_id\": \"fd143cb4-2187-464c-bab5-481387e954ff\"\n}"
+  }
+]

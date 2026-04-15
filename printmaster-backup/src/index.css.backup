@@ -1,0 +1,25 @@
+/* Minimal base — PrintMaster Pro uses its own theme in App.jsx */
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #f0f2f8;
+  color: #1a1d2e;
+  font-family: 'Sora', system-ui, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}

@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Posted Bills — OCR Scanner</title>
+<script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+:root {
+  --bg:#0f1117;--surface:#171b26;--surface2:#1e2336;--border:#2a3048;--border2:#353d5c;
+  --text:#e8ecf4;--muted:#6b7599;--accent:#f0b429;--accent2:#e8952a;
+  --green:#34d399;--green-bg:rgba(52,211,153,.1);--red:#f87171;--red-bg:rgba(248,113,113,.1);
+  --blue:#60a5fa;--mono:'JetBrains Mono',monospace;--sans:'Space Grotesk',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;}
+.app{display:flex;min-height:100vh;}
+/* Sidebar */
+.sidebar{width:230px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;position:fixed;height:100vh;z-index:20;}
+.s-logo{padding:22px 20px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;}
+.s-logo-icon{width:36px;height:36px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;}
+.s-logo h1{font-size:15px;font-weight:700;letter-spacing:-.3px;}
+.s-logo span{font-size:10px;color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px;}
+.s-sec{padding:16px 12px 8px;font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+.nav{display:flex;flex-direction:column;gap:2px;padding:0 8px;}
+.ni{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;font-size:13.5px;font-weight:500;color:var(--muted);cursor:pointer;transition:all .15s;}
+.ni:hover{color:var(--text);background:var(--surface2);}
+.ni.active{color:var(--accent);background:rgba(240,180,41,.08);}
+.ni .ico{font-size:15px;width:18px;text-align:center;}
+.nbadge{margin-left:auto;background:var(--accent);color:var(--bg);font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:10px;font-weight:600;}
+/* Main */
+.main{margin-left:230px;flex:1;min-width:0;}
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 32px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+.tb-l{display:flex;flex-direction:column;gap:3px;}
+.tb-title{font-size:18px;font-weight:700;letter-spacing:-.3px;}
+.tb-sub{font-size:11px;color:var(--muted);font-family:var(--mono);}
+.page{padding:28px 32px;}
+/* Tabs */
+.tabs{display:flex;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:24px;width:fit-content;}
+.tab{padding:8px 18px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s;}
+.tab.active{background:var(--accent);color:var(--bg);}
+.tab:hover:not(.active){color:var(--text);}
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:600;font-family:var(--sans);cursor:pointer;border:none;transition:all .15s;}
+.b-pri{background:var(--accent);color:var(--bg);}.b-pri:hover{background:var(--accent2);}
+.b-out{background:transparent;border:1.5px solid var(--border2);color:var(--text);}.b-out:hover{border-color:var(--accent);color:var(--accent);}
+.b-grn{background:var(--green);color:var(--bg);}.b-grn:hover{filter:brightness(.9);}
+.b-red{background:transparent;border:1.5px solid rgba(248,113,113,.3);color:var(--red);}.b-red:hover{background:var(--red-bg);}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.b-sm{padding:6px 13px;font-size:12px;}
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px;}
+.c-head{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.c-head-l{display:flex;align-items:center;gap:10px;}
+.c-head h3{font-size:14px;font-weight:700;letter-spacing:-.2px;}
+.c-tag{font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px;}
+.c-body{padding:20px;}
+/* Drop zone */
+.dz{border:2px dashed var(--border2);border-radius:10px;padding:48px 24px;text-align:center;cursor:pointer;transition:all .2s;position:relative;background:repeating-linear-gradient(45deg,transparent,transparent 10px,rgba(255,255,255,.01) 10px,rgba(255,255,255,.01) 20px);}
+.dz:hover,.dz.over{border-color:var(--accent);background:rgba(240,180,41,.04);}
+.dz input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.dz-icon{font-size:36px;margin-bottom:10px;opacity:.5;}
+.dz-title{font-size:15px;font-weight:700;margin-bottom:5px;}
+.dz-sub{font-size:12px;color:var(--muted);}
+.s-acts{display:flex;gap:10px;margin-top:14px;}
+/* Progress */
+.prog{display:none;margin-top:16px;background:rgba(240,180,41,.06);border:1px solid rgba(240,180,41,.2);border-radius:10px;padding:16px 18px;}
+.prog.show{display:block;}
+.p-top{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.spin{width:20px;height:20px;border:2px solid rgba(240,180,41,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.p-lbl{font-size:13px;font-weight:600;color:var(--accent);}
+.p-stp{font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px;}
+.p-trk{height:3px;background:rgba(240,180,41,.15);border-radius:2px;}
+.p-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .4s ease;width:0%;}
+.stages{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;}
+.stage{font-size:10px;font-family:var(--mono);padding:3px 8px;border-radius:4px;background:var(--surface2);color:var(--muted);border:1px solid var(--border);}
+.stage.done{background:rgba(52,211,153,.1);color:var(--green);border-color:rgba(52,211,153,.2);}
+.stage.active{background:rgba(240,180,41,.1);color:var(--accent);border-color:rgba(240,180,41,.2);}
+/* Preview panels */
+.panels{display:none;gap:16px;margin-top:16px;}
+.panels.show{display:grid;grid-template-columns:1fr 1fr;}
+.panel{border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+.p-hd{padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;justify-content:space-between;}
+.p-bd{padding:14px;}
+.p-img img{width:100%;display:block;max-height:260px;object-fit:contain;background:#000;}
+.rawtext{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:pre-wrap;word-break:break-word;line-height:1.7;max-height:260px;overflow-y:auto;}
+.rawtext .r-item{color:var(--green);}
+.rawtext .r-total{color:var(--accent);}
+.rawtext .r-hdr{color:var(--blue);}
+.rawtext .r-skip{color:var(--border2);text-decoration:line-through;}
+/* JSON preview */
+.json-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:11px;line-height:1.8;max-height:200px;overflow-y:auto;margin-bottom:14px;}
+.jk{color:var(--blue);}.js{color:var(--green);}.jn{color:var(--accent);}.jp{color:var(--muted);}
+/* Debug */
+.dbg{background:var(--bg);border:1px solid var(--border);border-radius:10px;}
+.dbg-h{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.dbg-h span{font-size:11px;font-family:var(--mono);color:var(--muted);}
+.dbg-log{padding:12px 14px;font-family:var(--mono);font-size:11px;line-height:1.8;max-height:160px;overflow-y:auto;}
+.l-ok{color:var(--green);}.l-warn{color:var(--accent);}.l-err{color:var(--red);}.l-info{color:var(--muted);}
+/* Form */
+.fcard{display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px;}
+.fcard.show{display:block;}
+.fcard-h{padding:14px 20px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,rgba(52,211,153,.08),rgba(52,211,153,.02));display:flex;align-items:center;justify-content:space-between;}
+.fcard-h h3{font-size:14px;font-weight:700;color:var(--green);}
+.fbody{padding:20px;}
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+.fr.one{grid-template-columns:1fr;}
+.fg{display:flex;flex-direction:column;gap:5px;}
+.fg label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-family:var(--mono);}
+.fg input,.fg textarea{padding:9px 12px;border:1.5px solid var(--border2);border-radius:7px;font-size:13px;font-family:var(--sans);color:var(--text);background:var(--bg);transition:border-color .15s;outline:none;}
+.fg input:focus,.fg textarea:focus{border-color:var(--accent);}
+.fg textarea{resize:vertical;min-height:60px;line-height:1.5;}
+/* Items table */
+.iw{margin-bottom:16px;}
+.ih{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.ih h4{font-size:13px;font-weight:700;}
+.it{width:100%;border-collapse:collapse;font-size:13px;}
+.it th{background:var(--surface2);padding:9px 11px;text-align:left;font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);}
+.it td{padding:7px 11px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.it tr:last-child td{border-bottom:none;}
+.it input{width:100%;background:transparent;border:1px solid transparent;padding:5px 6px;border-radius:5px;font-size:12.5px;font-family:var(--sans);color:var(--text);outline:none;transition:all .15s;}
+.it input:focus{border-color:var(--accent);background:var(--surface2);}
+.ni-num{text-align:right;font-family:var(--mono);}
+.rnum{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;}
+.dbtn{background:none;border:none;cursor:pointer;color:var(--border2);font-size:14px;padding:4px 6px;border-radius:4px;transition:all .15s;}
+.dbtn:hover{color:var(--red);background:var(--red-bg);}
+.tbar{display:flex;align-items:center;justify-content:flex-end;gap:20px;padding:12px 11px;border-top:2px solid var(--border2);margin-top:2px;background:rgba(240,180,41,.03);border-radius:0 0 8px 8px;}
+.tlbl{font-size:12px;font-weight:600;color:var(--muted);font-family:var(--mono);}
+.tval{font-family:var(--mono);font-size:22px;font-weight:600;color:var(--accent);}
+.ffoot{display:flex;gap:10px;padding-top:14px;border-top:1px solid var(--border);margin-top:2px;}
+/* Bills table */
+.bt{width:100%;border-collapse:collapse;font-size:13px;}
+.bt th{padding:11px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-family:var(--mono);font-weight:500;background:var(--surface2);border-bottom:1px solid var(--border);}
+.bt td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.bt tr:hover td{background:rgba(255,255,255,.02);}
+.sp{background:rgba(240,180,41,.1);color:var(--accent);font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:4px;font-weight:600;}
+.av{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--green);}
+.stp{background:var(--green-bg);color:var(--green);font-size:10px;font-family:var(--mono);padding:3px 9px;border-radius:20px;font-weight:600;}
+.empty{text-align:center;padding:56px 24px;color:var(--muted);}
+.e-icon{font-size:44px;margin-bottom:12px;opacity:.3;}
+.e-title{font-size:16px;font-weight:700;color:var(--text);margin-bottom:6px;}
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
+.sc{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;}
+.sc-lbl{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+.sc-val{font-size:24px;font-weight:700;font-family:var(--mono);}
+.sc-val.g{color:var(--green);}.sc-val.a{color:var(--accent);}.sc-val.b{color:var(--blue);}
+/* Toast */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-size:13px;font-weight:500;display:flex;align-items:center;gap:10px;box-shadow:0 8px 32px rgba(0,0,0,.4);transform:translateY(16px);opacity:0;transition:all .2s;z-index:200;}
+.toast.show{transform:translateY(0);opacity:1;}
+.toast.success{border-left:3px solid var(--green);}
+.toast.error{border-left:3px solid var(--red);}
+/* Modals */
+.ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:50;align-items:center;justify-content:center;backdrop-filter:blur(6px);}
+.ov.show{display:flex;}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;width:540px;max-width:96vw;box-shadow:0 24px 64px rgba(0,0,0,.5);}
+.m-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:15px;font-weight:700;}
+.m-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);padding:4px;transition:color .15s;}.m-close:hover{color:var(--red);}
+.m-body{padding:20px;}
+.m-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;}
+#camFeed{width:100%;border-radius:8px;background:#000;display:block;}
+#capCvs{display:none;}
+/* Detail */
+.dm{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+.df{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;}
+.df-l{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+.df-v{font-size:13px;font-weight:600;}
+.di{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:14px;}
+.di th{padding:8px 10px;background:var(--surface2);text-align:left;font-size:10px;font-family:var(--mono);color:var(--muted);border-bottom:1px solid var(--border);}
+.di td{padding:9px 10px;border-bottom:1px solid var(--border);}
+/* Worker load error banner */
+.err-banner{display:none;background:var(--red-bg);border:1px solid rgba(248,113,113,.3);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12.5px;color:var(--red);font-family:var(--mono);}
+.err-banner.show{display:block;}
+@media(max-width:800px){
+  .sidebar{width:56px;}.s-logo>div,.ni span,.s-sec{display:none;}
+  .main{margin-left:56px;}.fr{grid-template-columns:1fr;}
+  .page{padding:16px;}.topbar{padding:14px 16px;}.panels{grid-template-columns:1fr;}
+  .stats{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="s-logo">
+    <div class="s-logo-icon">🧾</div>
+    <div><h1>BillScan</h1><span>OCR System</span></div>
+  </div>
+  <div class="s-sec">Menu</div>
+  <div class="nav">
+    <div class="ni" id="nav-scan" onclick="switchTab('scan')"><span class="ico">📷</span><span>Scan Bill</span></div>
+    <div class="ni active" id="nav-bills" onclick="switchTab('bills')"><span class="ico">🗂️</span><span>Posted Bills</span><span class="nbadge" id="navBadge">0</span></div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="topbar">
+    <div class="tb-l">
+      <div class="tb-title">Posted Bills</div>
+      <div class="tb-sub">OCR-powered purchase bill scanner</div>
+    </div>
+    <button class="btn b-pri" onclick="goToScan()">＋ Scan New Bill</button>
+  </div>
+
+  <div class="page">
+    <div class="tabs">
+      <div class="tab" id="tab-scan" onclick="switchTab('scan')">📷 Scan Bill</div>
+      <div class="tab active" id="tab-bills" onclick="switchTab('bills')">🗂️ Posted Bills</div>
+    </div>
+
+    <!-- ══════ SCAN TAB ══════ -->
+    <div id="view-scan" style="display:none;">
+
+      <div class="card">
+        <div class="c-head">
+          <div class="c-head-l"><span>📷</span><h3>Step 1 — Upload or Capture Bill</h3></div>
+          <span class="c-tag">Tesseract OCR</span>
+        </div>
+        <div class="c-body">
+          <!-- Error banner shown if worker still fails -->
+          <div class="err-banner" id="errBanner"></div>
+
+          <div class="dz" id="dz">
+            <input type="file" id="fileInp" accept="image/*" onchange="handleFile(event)">
+            <div class="dz-icon">🧾</div>
+            <div class="dz-title">Drop bill image here or click to browse</div>
+            <div class="dz-sub">PNG · JPG · WEBP — works from local files &amp; browser</div>
+          </div>
+          <div class="s-acts">
+            <button class="btn b-out" onclick="openCam()">📸 Use Camera</button>
+            <button class="btn b-out" id="clrBtn" onclick="clearAll()" style="display:none;">✕ Clear</button>
+          </div>
+
+          <div class="prog" id="prog">
+            <div class="p-top">
+              <div class="spin"></div>
+              <div>
+                <div class="p-lbl" id="pLbl">Running Tesseract OCR…</div>
+                <div class="p-stp" id="pStp">Preparing engine</div>
+              </div>
+            </div>
+            <div class="p-trk"><div class="p-fill" id="pFill"></div></div>
+            <div class="stages" id="stagesRow">
+              <div class="stage" id="st0">Fetch Worker</div>
+              <div class="stage" id="st1">Load Engine</div>
+              <div class="stage" id="st2">Init Lang</div>
+              <div class="stage" id="st3">Recognize</div>
+              <div class="stage" id="st4">Parse</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Raw text preview -->
+      <div class="card" id="prevCard" style="display:none;">
+        <div class="c-head">
+          <div class="c-head-l"><span>🔍</span><h3>Step 2 — OCR Raw Text Output</h3></div>
+          <span class="c-tag">Raw Extraction</span>
+        </div>
+        <div class="c-body">
+          <div class="panels show">
+            <div class="panel">
+              <div class="p-hd">📄 Bill Image</div>
+              <div class="p-bd p-img"><img id="pvImg" src="" alt="Bill"></div>
+            </div>
+            <div class="panel">
+              <div class="p-hd">⌨ Raw OCR Text <span id="wc" style="color:var(--green);font-size:10px;"></span></div>
+              <div class="p-bd"><div class="rawtext" id="rawTxt">—</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Parser output -->
+      <div class="card" id="parseCard" style="display:none;">
+        <div class="c-head">
+          <div class="c-head-l"><span>⚙️</span><h3>Step 3 — Custom Parser Output</h3></div>
+          <span class="c-tag">Structured JSON</span>
+        </div>
+        <div class="c-body">
+          <div class="json-box" id="jsonBox"></div>
+          <div class="dbg" id="dbgPanel">
+            <div class="dbg-h">
+              <span>🔬 PARSER DEBUG LOG</span>
+              <button class="btn b-out b-sm" onclick="toggleDbg()">Hide</button>
+            </div>
+            <div class="dbg-log" id="dbgLog"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Editable form -->
+      <div class="fcard" id="fcard">
+        <div class="fcard-h">
+          <h3>✏️ Step 4 — Review &amp; Edit Before Saving</h3>
+          <span style="font-size:11px;color:var(--green);font-family:var(--mono);">ALL FIELDS EDITABLE</span>
+        </div>
+        <div class="fbody">
+          <div class="fr">
+            <div class="fg"><label>Supplier Name</label><input type="text" id="fSup" placeholder="Supplier / vendor name"></div>
+            <div class="fg"><label>Bill Date</label><input type="date" id="fDate"></div>
+          </div>
+          <div class="fr">
+            <div class="fg"><label>Invoice / Bill No.</label><input type="text" id="fBno" placeholder="e.g. INV-001"></div>
+            <div class="fg"><label>Payment Terms</label><input type="text" id="fTrm" placeholder="e.g. Cash, Net 30"></div>
+          </div>
+          <div class="iw">
+            <div class="ih"><h4>Line Items</h4><button class="btn b-out b-sm" onclick="addRow()">＋ Add Row</button></div>
+            <table class="it">
+              <thead><tr>
+                <th style="width:5%">#</th>
+                <th style="width:40%">Item Name</th>
+                <th style="width:15%">Qty</th>
+                <th style="width:18%">Unit Price</th>
+                <th style="width:16%">Amount</th>
+                <th style="width:6%"></th>
+              </tr></thead>
+              <tbody id="itbody"></tbody>
+            </table>
+            <div class="tbar">
+              <span class="tlbl">TOTAL AMOUNT</span>
+              <span class="tval" id="totDisp">₹ 0.00</span>
+            </div>
+          </div>
+          <div class="fr one">
+            <div class="fg"><label>Notes / Remarks</label><textarea id="fNotes" placeholder="GST no., address, or other details…"></textarea></div>
+          </div>
+          <div class="ffoot">
+            <button class="btn b-grn" onclick="saveBill()">✓ Confirm &amp; Post Bill</button>
+            <button class="btn b-out" onclick="clearAll()">✕ Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════ BILLS TAB ══════ -->
+    <div id="view-bills">
+      <div class="stats">
+        <div class="sc"><div class="sc-lbl">Total Bills</div><div class="sc-val b" id="stTotal">0</div></div>
+        <div class="sc"><div class="sc-lbl">Total Spend</div><div class="sc-val a" id="stSpend">₹0</div></div>
+        <div class="sc"><div class="sc-lbl">This Month</div><div class="sc-val g" id="stMonth">₹0</div></div>
+      </div>
+      <div class="card">
+        <div class="c-head">
+          <div class="c-head-l"><span>🗂️</span><h3>All Posted Bills</h3></div>
+          <button class="btn b-pri b-sm" onclick="goToScan()">＋ New Bill</button>
+        </div>
+        <div class="empty" id="emptyS">
+          <div class="e-icon">🧾</div>
+          <div class="e-title">No bills posted yet</div>
+          <div style="font-size:13px;margin-bottom:16px;">Scan your first supplier bill to get started</div>
+          <button class="btn b-pri" onclick="goToScan()">📷 Scan First Bill</button>
+        </div>
+        <table class="bt" id="billsTbl" style="display:none;">
+          <thead><tr>
+            <th>#</th><th>Supplier</th><th>Date</th><th>Invoice</th>
+            <th>Items</th><th>Total Amount</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="billsTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Camera Modal -->
+<div class="ov" id="camOv">
+  <div class="modal">
+    <div class="m-head">📸 Capture Bill Photo <button class="m-close" onclick="closeCam()">✕</button></div>
+    <div class="m-body"><video id="camFeed" autoplay playsinline></video><canvas id="capCvs"></canvas></div>
+    <div class="m-foot">
+      <button class="btn b-out" onclick="closeCam()">Cancel</button>
+      <button class="btn b-pri" onclick="capturePhoto()">📸 Capture</button>
+    </div>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div class="ov" id="detOv">
+  <div class="modal" style="width:620px;">
+    <div class="m-head">🧾 Bill Detail <button class="m-close" onclick="document.getElementById('detOv').classList.remove('show')">✕</button></div>
+    <div class="m-body" id="detBody" style="max-height:70vh;overflow-y:auto;"></div>
+    <div class="m-foot">
+      <button class="btn b-red b-sm" id="detDel">🗑 Delete</button>
+      <button class="btn b-out" onclick="document.getElementById('detOv').classList.remove('show')">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script>
+/* ═══════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════ */
+let bills = JSON.parse(localStorage.getItem('bs_v1') || '[]');
+let rowCnt = 0, camStream = null;
+let dbgVisible = true;
+
+/* ═══════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  renderTable();
+  setupDrop();
+  document.getElementById('fDate').value = todayStr();
+});
+const todayStr = () => new Date().toISOString().split('T')[0];
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+/* ═══════════════════════════════════════════
+   TABS
+═══════════════════════════════════════════ */
+function switchTab(t) {
+  document.getElementById('view-scan').style.display  = t==='scan'  ? 'block' : 'none';
+  document.getElementById('view-bills').style.display = t==='bills' ? 'block' : 'none';
+  ['scan','bills'].forEach(id => {
+    document.getElementById('tab-'+id).classList.toggle('active', id===t);
+    document.getElementById('nav-'+id).classList.toggle('active', id===t);
+  });
+}
+function goToScan() { switchTab('scan'); }
+
+/* ═══════════════════════════════════════════
+   DROP + FILE
+═══════════════════════════════════════════ */
+function setupDrop() {
+  const dz = document.getElementById('dz');
+  ['dragenter','dragover'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add('over'); }));
+  ['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove('over'); }));
+  dz.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f?.type.startsWith('image/')) readFile(f); });
+}
+function handleFile(e) { if (e.target.files[0]) readFile(e.target.files[0]); }
+function readFile(file) {
+  const r = new FileReader();
+  r.onload = ev => { showImg(ev.target.result); runOCR(ev.target.result); };
+  r.readAsDataURL(file);
+}
+function showImg(src) {
+  document.getElementById('pvImg').src = src;
+  document.getElementById('clrBtn').style.display = 'inline-flex';
+}
+
+/* ═══════════════════════════════════════════
+   FIX: Pre-fetch Tesseract worker so it works
+   from file:// protocol (origin = null).
+   fetch() to external URLs IS allowed from
+   file:// — we create our own blob URL from
+   the fetched script, which the browser then
+   treats as same-origin.
+═══════════════════════════════════════════ */
+const TESS_CDN = 'https://unpkg.com/tesseract.js@5.0.4';
+
+async function fetchAsBlobURL(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Failed to fetch ${url}: ${resp.status}`);
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+/* ═══════════════════════════════════════════
+   OCR — TESSERACT (raw text extraction only)
+═══════════════════════════════════════════ */
+function setStage(n) {
+  for (let i = 0; i < 5; i++) {
+    document.getElementById('st'+i).className =
+      'stage' + (i < n ? ' done' : i === n ? ' active' : '');
+  }
+}
+
+async function runOCR(imgData) {
+  const prog  = document.getElementById('prog');
+  const fill  = document.getElementById('pFill');
+  const lbl   = document.getElementById('pLbl');
+  const stp   = document.getElementById('pStp');
+  const errB  = document.getElementById('errBanner');
+
+  errB.classList.remove('show');
+  document.getElementById('prevCard').style.display  = 'none';
+  document.getElementById('parseCard').style.display = 'none';
+  document.getElementById('fcard').classList.remove('show');
+  document.getElementById('dbgLog').innerHTML = '';
+  prog.classList.add('show');
+  fill.style.width = '5%';
+  setStage(0);
+  lbl.textContent = 'Fetching Tesseract worker…';
+  stp.textContent = 'Downloading worker script (fixes file:// origin)';
+
+  try {
+    /* ── STEP 1: fetch worker.min.js → blob URL ──
+       This is the key fix. When you open an HTML
+       file locally, origin = "null" and the browser
+       blocks new Worker('https://...cdn...').
+       But fetch() TO external URLs FROM file:// IS
+       allowed. We fetch the script, make our own
+       blob URL from it (same null-origin = accepted),
+       and pass it as workerPath. */
+    let workerPath;
+    try {
+      stp.textContent = 'Fetching worker from CDN…';
+      workerPath = await fetchAsBlobURL(TESS_CDN + '/dist/worker.min.js');
+      setStage(1);
+      fill.style.width = '20%';
+      stp.textContent = 'Worker ready (blob URL created)';
+    } catch (fetchErr) {
+      /* If fetch fails (e.g., offline), fall back to
+         raw CDN URL — may work in some browsers */
+      console.warn('Worker fetch failed, trying direct CDN:', fetchErr);
+      workerPath = TESS_CDN + '/dist/worker.min.js';
+      stp.textContent = 'Fallback: using CDN URL directly';
+    }
+
+    lbl.textContent = 'Initializing Tesseract OCR…';
+
+    /* ── STEP 2: create Tesseract worker ── */
+    const worker = await Tesseract.createWorker('eng', 1, {
+      workerPath,          // our safe blob URL
+      workerBlobURL: false, // don't let Tesseract re-wrap it
+      logger: m => {
+        const s = m.status;
+        if (s === 'loading tesseract core')       { setStage(1); fill.style.width='30%'; stp.textContent='Loading WASM core'; }
+        if (s === 'initializing tesseract')        { setStage(1); fill.style.width='40%'; stp.textContent='Initializing engine'; }
+        if (s === 'loading language traineddata')  { setStage(2); fill.style.width='54%'; stp.textContent='Loading English language data'; }
+        if (s === 'initializing api')              { setStage(2); fill.style.width='65%'; stp.textContent='Preprocessing image'; }
+        if (s === 'recognizing text') {
+          setStage(3);
+          const pct = Math.round(m.progress * 100);
+          fill.style.width = (65 + pct * 0.25) + '%';
+          lbl.textContent  = `Tesseract scanning… ${pct}%`;
+          stp.textContent  = 'Recognizing characters';
+        }
+      }
+    });
+
+    lbl.textContent = 'Extracting text…';
+    const { data: { text } } = await worker.recognize(imgData);
+    await worker.terminate();
+
+    fill.style.width = '90%';
+    setStage(4);
+    lbl.textContent = 'Running custom parser…';
+    stp.textContent = 'Analysing lines and tokens';
+
+    /* Show preview card */
+    document.getElementById('prevCard').style.display = 'block';
+    renderRawText(text);
+
+    await delay(200);
+
+    /* ── STEP 3: custom parser ── */
+    const { result, log } = customParser(text);
+
+    fill.style.width = '100%';
+    lbl.textContent  = 'Done ✓';
+    stp.textContent  = `${result.items.length} item(s) extracted`;
+
+    await delay(300);
+    prog.classList.remove('show');
+
+    /* Show parser output */
+    document.getElementById('parseCard').style.display = 'block';
+    renderJsonPreview(result);
+    renderDebugLog(log);
+
+    /* Populate editable form */
+    populateForm(result);
+    document.getElementById('fcard').classList.add('show');
+    document.getElementById('fcard').scrollIntoView({ behavior:'smooth', block:'start' });
+
+  } catch (err) {
+    prog.classList.remove('show');
+    errB.textContent = '⚠ OCR Error: ' + err.message + ' — You can still fill in the form manually.';
+    errB.classList.add('show');
+    addRow();
+    document.getElementById('fcard').classList.add('show');
+    toast('OCR error — enter details manually', 'error');
+    console.error('OCR error:', err);
+  }
+}
+
+/* ═══════════════════════════════════════════
+   CUSTOM BILL PARSER
+   Line-by-line token analysis, no 3rd-party
+═══════════════════════════════════════════ */
+function customParser(raw) {
+  const log = [];
+  const L = (t, m) => log.push({ t, m });
+
+  /* 1. Clean & split */
+  const lines = raw.split('\n').map(l => l.replace(/\r/g,'').trim()).filter(l => l.length > 0);
+  L('info', `OCR returned ${lines.length} non-empty lines`);
+
+  /* 2. Skip-keyword regex */
+  const SKIP  = /^(total|sub[\s-]?total|grand\s*total|net\s*(total|amount|payable|due)|amount\s*(due|payable|received)|balance|gst|cgst|sgst|igst|vat|tax|discount|freight|delivery|shipping|advance|received|paid|change|thank|invoice|bill|receipt|purchase|order|phone|tel|mob|fax|email|address|city|state|pin|gstin|cin|pan|www|http|date|time|sr|s\.?no)/i;
+  const TOTAL = /(?:grand\s*)?total|net\s*(total|amount|payable)|amount\s*(due|payable)/i;
+
+  /* 3. Date */
+  let date = '';
+  const DATE_RE = [
+    /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})\b/,
+    /\b(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})\b/,
+    /\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s,]+(\d{2,4})\b/i,
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s,]+(\d{1,2})[\s,]+(\d{4})\b/i,
+  ];
+  for (const line of lines) {
+    for (const re of DATE_RE) {
+      const m = line.match(re);
+      if (m) {
+        try {
+          const d = new Date(m[0]);
+          if (!isNaN(d)) { date = d.toISOString().split('T')[0]; L('ok','Date: '+m[0]+' → '+date); break; }
+        } catch(_) {}
+      }
+      if (date) break;
+    }
+    if (date) break;
+  }
+  if (!date) { date = todayStr(); L('warn','No date found, using today'); }
+
+  /* 4. Invoice number */
+  let billNo = '';
+  const INV_RE = /(?:invoice|bill|inv|receipt|no\.?|ref\.?|#)\s*[:\-#\s]?\s*([A-Z0-9\/\-]{2,20})/i;
+  for (const line of lines) {
+    const m = line.match(INV_RE);
+    if (m?.[1]?.length >= 2) { billNo = m[1].trim().toUpperCase(); L('ok','Invoice: '+billNo); break; }
+  }
+
+  /* 5. Supplier name (first meaningful all-alpha heading line) */
+  let supplier = '';
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
+    const l = lines[i];
+    const alphas = (l.match(/[a-zA-Z]/g)||[]).length;
+    const nums   = (l.match(/\d/g)||[]).length;
+    if (alphas >= 3 && alphas > nums && !SKIP.test(l) && !/^\d/.test(l)) {
+      const uppers = (l.match(/\b[A-Z]{2,}\b/g)||[]).length;
+      if (uppers >= 1 || alphas >= 5) {
+        supplier = toTitle(l.replace(/[^\w\s&.,\-']/g,'').trim());
+        if (supplier.length >= 3) { L('ok','Supplier: "'+supplier+'" (line '+i+')'); break; }
+      }
+    }
+  }
+  if (!supplier) L('warn','Could not detect supplier name');
+
+  /* 6. Parse items line by line */
+  const items = [];
+  let totalAmt = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length < 2) continue;
+
+    /* Skip supplier match */
+    if (supplier && supplier.length > 3) {
+      const sup0 = supplier.split(' ')[0].toLowerCase();
+      if (sup0.length > 3 && line.toLowerCase().startsWith(sup0)) {
+        L('info', `[header] L${i+1}: "${line}"`); continue;
+      }
+    }
+
+    /* Is it a total line? */
+    if (TOTAL.test(line)) {
+      const nums = [...line.matchAll(/([\d,]+(?:\.\d{1,2})?)/g)].map(m => parseFloat(m[1].replace(/,/g,'')));
+      if (nums.length) { totalAmt = nums[nums.length-1]; L('ok',`[total] L${i+1}: ${totalAmt}`); }
+      continue;
+    }
+
+    /* Skip keyword lines */
+    if (SKIP.test(line)) { L('info',`[skip] L${i+1}: "${line}"`); continue; }
+
+    /* Tokenise line */
+    const numToks = [...line.matchAll(/([\d,]+(?:\.\d{1,2})?)/g)]
+                      .map(m => parseFloat(m[1].replace(/,/g,'')))
+                      .filter(n => !isNaN(n) && n > 0);
+    const wordToks = line
+      .replace(/([\d,]+(?:\.\d{1,2})?)/g,' ')
+      .replace(/[^\w\s]/g,' ')
+      .replace(/\s+/g,' ')
+      .trim()
+      .split(' ')
+      .filter(w => w.length >= 2 && !/^(no|sl|sr|sno|qty|pcs|kg|gm|ml|ltr|nos|unit|pc|rs|inr|num)$/i.test(w));
+
+    const text = wordToks.join(' ');
+    if (!text || text.length < 2 || !numToks.length) {
+      if (numToks.length === 0) L('info',`[no-nums] L${i+1}: "${line}"`);
+      else L('info',`[no-text] L${i+1}: "${line}"`);
+      continue;
+    }
+
+    let item = null;
+
+    /* Pattern A: name  qty  unit-price  [total] — 3+ numbers */
+    if (numToks.length >= 3) {
+      const qty   = numToks[numToks.length-3];
+      const price = numToks[numToks.length-2];
+      if (qty > 0 && qty < 10000 && price > 0)
+        item = { name: toTitle(text), qty, price };
+      if (item) L('ok',`[A] L${i+1}: "${item.name}" qty=${qty} price=${price}`);
+    }
+    /* Pattern B: name  qty  price — exactly 2 numbers */
+    if (!item && numToks.length === 2) {
+      const [qty, price] = numToks;
+      if (qty > 0 && qty <= 9999 && price > 0)
+        item = { name: toTitle(text), qty, price };
+      if (item) L('ok',`[B] L${i+1}: "${item.name}" qty=${qty} price=${price}`);
+    }
+    /* Pattern C: name  amount — 1 number (qty assumed 1) */
+    if (!item && numToks.length === 1) {
+      const price = numToks[0];
+      if (price > 0 && price < 1e6)
+        item = { name: toTitle(text), qty: 1, price };
+      if (item) L('ok',`[C] L${i+1}: "${item.name}" price=${price}`);
+    }
+
+    if (item) {
+      const dup = items.find(x => x.name.toLowerCase() === item.name.toLowerCase());
+      if (dup) { dup.qty += item.qty; L('warn',`[dedup] "${item.name}" qty now=${dup.qty}`); }
+      else items.push(item);
+    } else {
+      L('info',`[unmatched] L${i+1}: "${line}"`);
+    }
+  }
+
+  /* 7. Verify total */
+  const computed = items.reduce((s, it) => s + it.qty * it.price, 0);
+  if (totalAmt === 0) {
+    totalAmt = computed;
+    L('warn',`No explicit total — computed: ${totalAmt.toFixed(2)}`);
+  } else if (Math.abs(totalAmt - computed) > 1) {
+    L('warn',`Total mismatch: OCR=${totalAmt}, computed=${computed.toFixed(2)}`);
+  } else {
+    L('ok',`Total verified: ₹${totalAmt}`);
+  }
+
+  L('info',`── Done: ${items.length} item(s), total ₹${parseFloat(totalAmt.toFixed(2))} ──`);
+  return { result: { supplier, date, billNo, items, total: parseFloat(totalAmt.toFixed(2)) }, log };
+}
+
+/* ═══════════════════════════════════════════
+   UI — RAW TEXT (colour-coded)
+═══════════════════════════════════════════ */
+function renderRawText(text) {
+  const el = document.getElementById('rawTxt');
+  const wc = text.split(/\s+/).filter(Boolean).length;
+  document.getElementById('wc').textContent = wc + ' words';
+  const TOT = /(?:grand\s*)?total|net\s*(total|amount|payable)/i;
+  const SKP = /^(invoice|bill|receipt|phone|tel|mob|email|address|gst|vat|tax|cgst|sgst|thank|www)/i;
+  el.innerHTML = text.split('\n').map(l => {
+    if (!l.trim()) return '';
+    if (TOT.test(l)) return `<span class="r-total">${esc(l)}</span>`;
+    if (SKP.test(l)) return `<span class="r-skip">${esc(l)}</span>`;
+    if (/\d/.test(l) && /[a-zA-Z]{2,}/.test(l)) return `<span class="r-item">${esc(l)}</span>`;
+    if (/[a-zA-Z]{2,}/.test(l) && !/\d/.test(l)) return `<span class="r-hdr">${esc(l)}</span>`;
+    return esc(l);
+  }).filter(Boolean).join('\n');
+}
+
+/* ═══════════════════════════════════════════
+   UI — JSON PREVIEW (syntax highlighted)
+═══════════════════════════════════════════ */
+function renderJsonPreview(result) {
+  document.getElementById('jsonBox').innerHTML = JSON.stringify(result, null, 2)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"([^"]+)":/g,'<span class="jk">"$1"</span>:')
+    .replace(/: "([^"]*)"([,\n])/g,': <span class="js">"$1"</span>$2')
+    .replace(/: (\d+(?:\.\d+)?)([,\n}])/g,': <span class="jn">$1</span>$2')
+    .replace(/[{}\[\],]/g, m => `<span class="jp">${m}</span>`);
+}
+
+/* ═══════════════════════════════════════════
+   UI — DEBUG LOG
+═══════════════════════════════════════════ */
+function renderDebugLog(log) {
+  const el = document.getElementById('dbgLog');
+  const CLS = { ok:'l-ok', warn:'l-warn', err:'l-err', info:'l-info' };
+  const PFX = { ok:'✓', warn:'⚠', err:'✗', info:'·' };
+  el.innerHTML = log.map(e => `<div class="${CLS[e.t]||'l-info'}">${PFX[e.t]||'·'} ${esc(e.m)}</div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+function toggleDbg() {
+  dbgVisible = !dbgVisible;
+  document.getElementById('dbgLog').style.display = dbgVisible ? 'block' : 'none';
+  document.querySelector('#dbgPanel .b-sm').textContent = dbgVisible ? 'Hide' : 'Show';
+}
+
+/* ═══════════════════════════════════════════
+   FORM
+═══════════════════════════════════════════ */
+function populateForm(r) {
+  document.getElementById('fSup').value   = r.supplier || '';
+  document.getElementById('fDate').value  = r.date     || todayStr();
+  document.getElementById('fBno').value   = r.billNo   || '';
+  document.getElementById('fNotes').value = '';
+  document.getElementById('itbody').innerHTML = '';
+  rowCnt = 0;
+  (r.items?.length ? r.items : []).forEach(it => addRow(it.name||'', parseFloat(it.qty)||1, parseFloat(it.price)||0));
+  if (!r.items?.length) addRow();
+  calcTotal();
+}
+
+function addRow(name='', qty=1, price=0) {
+  const id = ++rowCnt;
+  const tr = document.createElement('tr');
+  tr.id = `row${id}`;
+  tr.innerHTML = `
+    <td class="rnum">${id}</td>
+    <td><input type="text" value="${esc(name)}" placeholder="Item description" oninput="calcTotal()"></td>
+    <td><input type="number" class="ni-num" value="${qty}" min="0" step="0.01" oninput="calcTotal()"></td>
+    <td><input type="number" class="ni-num" value="${price}" min="0" step="0.01" oninput="calcTotal()"></td>
+    <td id="amt${id}" style="font-family:var(--mono);font-size:13px;text-align:right;color:var(--green);">${(qty*price).toFixed(2)}</td>
+    <td><button class="dbtn" onclick="delRow(${id})">✕</button></td>`;
+  document.getElementById('itbody').appendChild(tr);
+  calcTotal();
+}
+function delRow(id) { document.getElementById(`row${id}`)?.remove(); renumber(); calcTotal(); }
+function renumber() { document.querySelectorAll('#itbody tr').forEach((r,i)=>{ const n=r.querySelector('.rnum'); if(n) n.textContent=i+1; }); }
+function calcTotal() {
+  let t = 0;
+  document.querySelectorAll('#itbody tr').forEach(tr => {
+    const ns = tr.querySelectorAll('input[type=number]'), id = tr.id.replace('row','');
+    if (ns.length >= 2) { const a=(parseFloat(ns[0].value)||0)*(parseFloat(ns[1].value)||0); t+=a; const c=document.getElementById('amt'+id); if(c) c.textContent=a.toFixed(2); }
+  });
+  document.getElementById('totDisp').textContent = '₹ ' + t.toFixed(2);
+}
+function getItems() {
+  const it = [];
+  document.querySelectorAll('#itbody tr').forEach(tr => {
+    const ins = tr.querySelectorAll('input');
+    if (ins.length >= 3) { const n=ins[0].value.trim(),q=parseFloat(ins[1].value)||0,p=parseFloat(ins[2].value)||0; if(n) it.push({name:n,qty:q,price:p,amount:q*p}); }
+  });
+  return it;
+}
+
+/* ═══════════════════════════════════════════
+   SAVE
+═══════════════════════════════════════════ */
+function saveBill() {
+  const sup = document.getElementById('fSup').value.trim();
+  const dt  = document.getElementById('fDate').value;
+  if (!sup) { toast('Enter a supplier name','error'); return; }
+  if (!dt)  { toast('Select a bill date','error'); return; }
+  const items = getItems();
+  if (!items.length) { toast('Add at least one item','error'); return; }
+  const bill = {
+    id: Date.now(), supplier:sup, date:dt,
+    billNo: document.getElementById('fBno').value.trim(),
+    terms:  document.getElementById('fTrm').value.trim(),
+    notes:  document.getElementById('fNotes').value.trim(),
+    items, total: items.reduce((s,i)=>s+i.amount,0),
+    postedAt: new Date().toISOString(),
+    image: document.getElementById('pvImg').src || null,
+  };
+  bills.unshift(bill);
+  localStorage.setItem('bs_v1', JSON.stringify(bills));
+  renderTable(); clearAll(); switchTab('bills');
+  toast('✓ Bill posted to purchases table','success');
+}
+
+/* ═══════════════════════════════════════════
+   BILLS TABLE
+═══════════════════════════════════════════ */
+function renderTable() {
+  const tb=document.getElementById('billsTbody'), tbl=document.getElementById('billsTbl'), em=document.getElementById('emptyS');
+  const ts=bills.reduce((s,b)=>s+b.total,0);
+  const tm=bills.filter(b=>{ const d=new Date(b.date),n=new Date(); return d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear(); }).reduce((s,b)=>s+b.total,0);
+  document.getElementById('stTotal').textContent = bills.length;
+  document.getElementById('stSpend').textContent = '₹'+ts.toLocaleString('en-IN',{maximumFractionDigits:0});
+  document.getElementById('stMonth').textContent = '₹'+tm.toLocaleString('en-IN',{maximumFractionDigits:0});
+  document.getElementById('navBadge').textContent = bills.length;
+  if (!bills.length) { tbl.style.display='none'; em.style.display='block'; return; }
+  tbl.style.display='table'; em.style.display='none'; tb.innerHTML='';
+  bills.forEach((b,i) => {
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td style="font-family:var(--mono);font-size:11px;color:var(--muted);">${String(bills.length-i).padStart(3,'0')}</td>
+      <td><span class="sp">${esc(b.supplier)}</span></td>
+      <td style="font-size:12.5px;">${fmtDate(b.date)}</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--muted);">${esc(b.billNo)||'—'}</td>
+      <td style="font-size:12px;color:var(--muted);">${b.items.length} item${b.items.length!==1?'s':''}</td>
+      <td><span class="av">₹ ${b.total.toFixed(2)}</span></td>
+      <td><span class="stp">POSTED</span></td>
+      <td><button class="btn b-out b-sm" onclick="viewDetail(${b.id})">View</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+/* ═══════════════════════════════════════════
+   DETAIL
+═══════════════════════════════════════════ */
+function viewDetail(id) {
+  const b=bills.find(x=>x.id===id); if(!b) return;
+  const rows=b.items.map(it=>`<tr>
+    <td style="padding:9px 10px;border-bottom:1px solid var(--border);">${esc(it.name)}</td>
+    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);">${it.qty}</td>
+    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);">₹${it.price.toFixed(2)}</td>
+    <td style="padding:9px 10px;border-bottom:1px solid var(--border);text-align:right;font-family:var(--mono);color:var(--green);">₹${it.amount.toFixed(2)}</td>
+  </tr>`).join('');
+  const img=b.image?.startsWith('data:')?`<img src="${b.image}" style="width:100%;border-radius:8px;margin-bottom:14px;border:1px solid var(--border);">`:'';
+  document.getElementById('detBody').innerHTML=`
+    ${img}
+    <div class="dm">
+      <div class="df"><div class="df-l">Supplier</div><div class="df-v">${esc(b.supplier)}</div></div>
+      <div class="df"><div class="df-l">Bill Date</div><div class="df-v">${fmtDate(b.date)}</div></div>
+      <div class="df"><div class="df-l">Invoice No.</div><div class="df-v">${esc(b.billNo)||'—'}</div></div>
+      <div class="df"><div class="df-l">Posted</div><div class="df-v" style="font-size:12px;">${new Date(b.postedAt).toLocaleString()}</div></div>
+    </div>
+    ${b.notes?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted);margin-bottom:14px;">${esc(b.notes)}</div>`:''}
+    <table class="di">
+      <thead><tr>
+        <th>Item</th><th style="text-align:right">Qty</th>
+        <th style="text-align:right">Price</th><th style="text-align:right">Amount</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="text-align:right;font-family:var(--mono);font-size:20px;font-weight:700;color:var(--accent);margin-top:12px;">Total: ₹ ${b.total.toFixed(2)}</div>`;
+  document.getElementById('detDel').onclick=()=>delBill(id);
+  document.getElementById('detOv').classList.add('show');
+}
+function delBill(id) {
+  if(!confirm('Delete this bill permanently?'))return;
+  bills=bills.filter(b=>b.id!==id);
+  localStorage.setItem('bs_v1',JSON.stringify(bills));
+  renderTable(); document.getElementById('detOv').classList.remove('show');
+  toast('Bill deleted','error');
+}
+
+/* ═══════════════════════════════════════════
+   CAMERA
+═══════════════════════════════════════════ */
+async function openCam() {
+  try {
+    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    document.getElementById('camFeed').srcObject=camStream;
+    document.getElementById('camOv').classList.add('show');
+  } catch(e){toast('Camera: '+e.message,'error');}
+}
+function capturePhoto() {
+  const v=document.getElementById('camFeed'),c=document.getElementById('capCvs');
+  c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
+  const url=c.toDataURL('image/jpeg',.92);
+  closeCam(); showImg(url); runOCR(url);
+}
+function closeCam() {
+  camStream?.getTracks().forEach(t=>t.stop());camStream=null;
+  document.getElementById('camFeed').srcObject=null;
+  document.getElementById('camOv').classList.remove('show');
+}
+
+/* ═══════════════════════════════════════════
+   CLEAR
+═══════════════════════════════════════════ */
+function clearAll() {
+  document.getElementById('fileInp').value='';
+  document.getElementById('pvImg').src='';
+  document.getElementById('clrBtn').style.display='none';
+  document.getElementById('prog').classList.remove('show');
+  document.getElementById('prevCard').style.display='none';
+  document.getElementById('parseCard').style.display='none';
+  document.getElementById('fcard').classList.remove('show');
+  document.getElementById('errBanner').classList.remove('show');
+  document.getElementById('pFill').style.width='0%';
+  document.getElementById('rawTxt').textContent='—';
+  document.getElementById('itbody').innerHTML='';
+  ['fSup','fBno','fTrm','fNotes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('fDate').value=todayStr();
+  rowCnt=0; calcTotal(); setStage(-1);
+}
+
+/* ═══════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════ */
+function toast(msg,type='success'){
+  const t=document.getElementById('toast');
+  document.getElementById('toastMsg').textContent=msg;
+  t.className=`toast ${type} show`;
+  setTimeout(()=>t.classList.remove('show'),3500);
+}
+function fmtDate(d){
+  if(!d)return'—';
+  try{return new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});}catch{return d;}
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function toTitle(s){return String(s).replace(/\w\S*/g,t=>t.charAt(0).toUpperCase()+t.substr(1).toLowerCase());}
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[
+  {
+    "method": "GET",
+    "url": "/gst/compliance/taxpayer/08AABCJ0355R1Z7",
+    "status": 403,
+    "res": "{\n    \"code\": 403,\n    \"message\": \"Insufficient privilege\",\n    \"timestamp\": 1774853810584,\n    \"transaction_id\": \"a1a906b6-8110-454a-a1a9-a293e81f66d7\"\n}"
+  },
+  {
+    "method": "POST",
+    "url": "/gst/compliance/taxpayer",
+    "status": 403,
+    "res": "{\n    \"code\": 403,\n    \"message\": \"Insufficient privilege\",\n    \"timestamp\": 1774853810645,\n    \"transaction_id\": \"d385795b-33a6-4460-9290-6c75372b60f1\"\n}"
+  },
+  {
+    "method": "POST",
+    "url": "/gst/compliance/taxpayer/search",
+    "status": 403,
+    "res": "{\n    \"code\": 403,\n    \"message\": \"Insufficient privilege\",\n    \"timestamp\": 1774853810705,\n    \"transaction_id\": \"4837f2be-0f51-45bc-b0fb-dba4054ac26c\"\n}"
+  }
+]

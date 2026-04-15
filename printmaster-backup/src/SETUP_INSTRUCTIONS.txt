@@ -1,0 +1,26 @@
+# PrintMaster Pro — Setup Instructions
+# Run these commands ONE BY ONE in PowerShell
+
+# Step 1 — Go to your project
+cd "C:\Users\chhab\OneDrive\Desktop\SELL AND MAGN\printmaster"
+
+# Step 2 — Install Supabase package
+npm install @supabase/supabase-js
+
+# Step 3 — Copy the 2 files:
+#   printing-press-app.jsx  →  paste into  src/App.jsx   (replace everything)
+#   supabase.js             →  paste into  src/supabase.js  (new file)
+
+# Step 4 — Also go to Supabase → Table Editor → Each table → RLS (Row Level Security)
+#   Click "Disable RLS" on bills, tasks, customers tables
+#   (So the app can read/write without login)
+
+# Step 5 — Run the app
+npm run dev
+
+# Step 6 — Open browser at:
+#   http://localhost:5173
+
+# Step 7 — Deploy live on Vercel
+npm install -g vercel
+vercel
