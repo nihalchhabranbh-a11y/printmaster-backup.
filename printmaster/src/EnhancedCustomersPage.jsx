@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { db } from "./supabase.js";
 import { getBillPaymentInfo } from "./billingUtils.js";
 
@@ -151,12 +151,14 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
     setForm(emptyForm());
   };
 
-  const openNew = () => {
+  // Task 5.3 – useCallback: stable references prevent child row re-renders
+  // when only unrelated state in EnhancedCustomersPage changes.
+  const openNew = useCallback(() => {
     resetForm();
     setShowModal(true);
-  };
+  }, []);
 
-  const openEdit = (party) => {
+  const openEdit = useCallback((party) => {
     setEditing(party);
     setForm({
       name: party.name || "",
@@ -177,9 +179,9 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
       partyCategory: party.party_category || party.partyCategory || "",
     });
     setShowModal(true);
-  };
+  }, []);
 
-  const handleDelete = async (partyId) => {
+  const handleDelete = useCallback(async (partyId) => {
     if (!window.confirm("Are you sure you want to delete this party? This action cannot be undone.")) return;
     try {
       if (String(partyId).includes("-")) {
@@ -193,7 +195,7 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
     } catch (err) {
       showToast(err.message || "Failed to delete party", "error");
     }
-  };
+  }, [showToast, selected]);
 
   const save = async () => {
     if (!form.name.trim()) {
@@ -355,14 +357,28 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
     }
   }, [filtered, selected, viewMode, jumpToCustomer]);
 
+  // Task 4.2 – Pre-compute balance for every party once; O(parties×bills) happens
+  // here not on every sort comparator or row render.
+  const balanceMap = useMemo(() => {
+    const map = new Map();
+    mergedCustomers.forEach(party => {
+      map.set(party.id || party.phone || party.name, getPartyBalanceDetails(party));
+    });
+    return map;
+  }, [mergedCustomers, bills, billPayments]);
+
+  // Helper: look up pre-computed balance - O(1) per call
+  const getBalance = useCallback(
+    (party) => balanceMap.get(party.id || party.phone || party.name) || { finalDue: 0, balanceType: "to_collect" },
+    [balanceMap]
+  );
+
   // Table sorted data
   const sortedFiltered = useMemo(() => {
     return [...filtered].sort((a, b) => {
       if (sortCol === "balance") {
-        const aInfo = getPartyBalanceDetails(a);
-        const bInfo = getPartyBalanceDetails(b);
-        const aVal = aInfo.finalDue;
-        const bVal = bInfo.finalDue;
+        const aVal = (balanceMap.get(a.id || a.phone || a.name) || { finalDue: 0 }).finalDue;
+        const bVal = (balanceMap.get(b.id || b.phone || b.name) || { finalDue: 0 }).finalDue;
         return sortDir === "asc" ? aVal - bVal : bVal - aVal;
       }
       // default: name
@@ -370,16 +386,16 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
       const bName = (b.name || "").toLowerCase();
       return sortDir === "asc" ? aName.localeCompare(bName) : bName.localeCompare(aName);
     });
-  }, [filtered, sortCol, sortDir]);
+  }, [filtered, sortCol, sortDir, balanceMap]);
 
-  const handleSort = (col) => {
+  const handleSort = useCallback((col) => { // Task 5.3
     if (sortCol === col) {
       setSortDir(d => d === "asc" ? "desc" : "asc");
     } else {
       setSortCol(col);
       setSortDir("asc");
     }
-  };
+  }, [sortCol]); // Task 5.3 – deps: re-create only when sortCol changes
 
   return (
     <div style={{ height: "calc(100vh - 40px)", display: "flex", flexDirection: "column", background: "#f8f9fa", fontFamily: "system-ui, sans-serif" }}>
@@ -490,7 +506,7 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
                 {sortedFiltered
                   .filter(p => partyTypeFilter === "all" || (p.party_type || p.partyType || "customer").toLowerCase() === partyTypeFilter)
                   .map((party, idx) => {
-                    const balInfo = getPartyBalanceDetails(party);
+                    const balInfo = getBalance(party); // Task 4.2 – O(1) map lookup
                     const isCredit = balInfo.finalDue > 0 && balInfo.balanceType === "to_collect";
                     const isDebit = balInfo.finalDue > 0 && balInfo.balanceType !== "to_collect";
                     return (
@@ -569,7 +585,7 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
               <div style={{ padding: "32px 16px", textAlign: "center", color: "#6b7280", fontSize: "14px" }}>No parties found.</div>
             ) : (
                 filtered.map((party) => {
-                  const balInfo = getPartyBalanceDetails(party);
+                  const balInfo = getBalance(party); // Task 4.2 – O(1) map lookup
                   const isSelected = selected?.id === party.id || selected?.name === party.name;
                   return (
                     <div 

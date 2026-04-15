@@ -1,3 +1,5 @@
+import { roundCurrency } from "./lib/money.js";
+
 export const getBillPaymentInfo = (bill, billPayments) => {
   const payments = (billPayments || []).filter((p) => (p.billId || p.bill_id) === bill.id);
   const paidAmount = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
@@ -32,9 +34,9 @@ export const calculatePartyBalance = (partyName, bills, billPayments, customers)
   partyBills.forEach(b => {
     const docType = b.docType || b.doc_type || "Sales Invoice";
     if (docType === "Payment In" || docType === "Sales Return" || docType === "Credit Note") {
-        balance -= (b.total || 0);
+        balance = roundCurrency(balance - (b.total || 0));
     } else {
-        balance += (b.total || 0);
+        balance = roundCurrency(balance + (b.total || 0));
     }
   });
 
@@ -43,7 +45,7 @@ export const calculatePartyBalance = (partyName, bills, billPayments, customers)
     return bill && bill.customer === partyName;
   }) || [];
   
-  pPayments.forEach(p => balance -= (Number(p.amount) || 0));
+  pPayments.forEach(p => { balance = roundCurrency(balance - (Number(p.amount) || 0)); });
 
   return balance;
 };

@@ -9,6 +9,21 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
+// ── Password hashing helper (calls server-side Edge Function) ─────────────────
+// Passwords are NEVER hashed in the browser — the raw value is sent over TLS
+// to the Edge Function which returns the PBKDF2-SHA256 hash.
+export async function hashPasswordForStorage(plaintext) {
+  const { data, error } = await supabase.functions.invoke("hash-password", {
+    body: { password: String(plaintext) },
+  });
+  if (error || !data?.hash) {
+    const msg = error?.message || "hash-password function returned no hash";
+    console.error("hashPasswordForStorage:", msg);
+    throw new Error("Failed to hash password: " + msg);
+  }
+  return data.hash;
+}
+
 export async function sendBillEmail({ type, bill, brand, to, cc }) {
   // type: "invoice_created" | "payment_received"
   // This uses a Supabase Edge Function (keeps SMTP password out of frontend).
@@ -125,19 +140,26 @@ export const db = {
   },
 
   async addOrgAdmin(organisationId, admin) {
+    const hashedPassword = await hashPasswordForStorage(admin.password);
     const payload = {
       organisation_id: organisationId,
       username: admin.username,
-      password: admin.password,
+      password: hashedPassword,
       name: admin.name ?? admin.username,
       email: admin.email ?? null,
     };
-    const { data, error } = await supabase.from("org_admins").insert([payload]).select("*").single();
+    const { data, error } = await supabase.from("org_admins").insert([payload]).select("id, username, name, email, organisation_id, created_at").single();
     if (error) {
       console.error("addOrgAdmin:", error.message);
       throw new Error(error.message);
     }
     return { ...data, createdAt: data.created_at };
+  },
+
+  async updateOrgAdminPassword(id, password) {
+    const hashedPassword = await hashPasswordForStorage(password);
+    const { error } = await supabase.from("org_admins").update({ password: hashedPassword }).eq("id", id);
+    if (error) console.error("updateOrgAdminPassword:", error.message);
   },
 
   async approveOrganisation(id) {
@@ -166,108 +188,26 @@ export const db = {
     if (error) console.error("unlockOrganisation:", error.message);
   },
 
-  // LOGIN HELPERS (single login page; infer organisation from credentials)
-  async loginWithCredentials(username, password, superAdminPassword) {
+  // LOGIN HELPERS — delegates to the app-auth Edge Function (server-side, no plaintext exposure)
+  async loginWithCredentials(username, password) {
     const u = (username || "").trim();
     const p = (password || "").trim();
     if (!u || !p) return null;
 
-    // Super Admin (global) — does not belong to an organisation
-    // Username is hard-coded to match ADMIN in App.jsx
-    if (u === "Nihal" && p === (superAdminPassword || "")) {
-      return { id: "super-admin", username: "Nihal", role: "admin", name: "Nihal", organisationId: null };
+    const { data, error } = await supabase.functions.invoke("app-auth", {
+      body: { username: u, password: p },
+    });
+
+    if (error) {
+      console.error("loginWithCredentials invoke error:", error.message || error);
+      throw new Error(error.message || "Authentication service unavailable");
     }
 
-    // Helper: fetch org separately to avoid PostgREST embedded-join HTTP 400 errors
-    const fetchOrg = async (orgId) => {
-      if (!orgId) return null;
-      const { data } = await supabase
-        .from("organisations")
-        .select("status, access_enabled")
-        .eq("id", orgId)
-        .maybeSingle();
-      return data || null;
-    };
-
-    const allowedOrg = (org) => org && org.status === "approved" && org.access_enabled !== false;
-
-    // Org admins
-    {
-      const { data, error } = await supabase
-        .from("org_admins")
-        .select("id, username, password, name, organisation_id")
-        .eq("username", u)
-        .eq("password", p)
-        .limit(1)
-        .maybeSingle();
-      if (!error && data) {
-        const org = await fetchOrg(data.organisation_id);
-        if (allowedOrg(org)) {
-          return {
-            id: data.id,
-            username: data.username,
-            role: "admin",
-            name: data.name || data.username,
-            organisationId: data.organisation_id,
-            organisationPlan: org?.plan || "free",
-          };
-        }
-      }
-    }
-
-    // Workers
-    {
-      const { data, error } = await supabase
-        .from("workers")
-        .select("id, username, password, name, role, organisation_id")
-        .eq("username", u)
-        .eq("password", p)
-        .limit(1)
-        .maybeSingle();
-      if (!error && data) {
-        const org = await fetchOrg(data.organisation_id);
-        if (allowedOrg(org)) {
-          return {
-            id: data.id,
-            username: data.username,
-            role: data.role || "worker",
-            name: data.name || data.username,
-            organisationId: data.organisation_id,
-            organisationPlan: org?.plan || "free",
-          };
-        }
-      }
-    }
-
-    // Vendors
-    {
-      const { data, error } = await supabase
-        .from("vendors")
-        .select("id, username, password, name, firm_name, organisation_id")
-        .eq("username", u)
-        .eq("password", p)
-        .limit(1)
-        .maybeSingle();
-      if (!error && data) {
-        const org = await fetchOrg(data.organisation_id);
-        if (allowedOrg(org)) {
-          return {
-            id: data.id,
-            username: data.username,
-            role: "vendor",
-            name: data.name || data.firm_name || data.username,
-            organisationId: data.organisation_id,
-            organisationPlan: org?.plan || "free",
-          };
-        }
-      }
-    }
-
-    return null;
+    return data?.user ?? null;
   },
 
   async getOrgAdmins(organisationId) {
-    const { data, error } = await supabase.from("org_admins").select("*").eq("organisation_id", organisationId);
+    const { data, error } = await supabase.from("org_admins").select("id, username, name, email, organisation_id, created_at").eq("organisation_id", organisationId);
     if (error) {
       console.error("getOrgAdmins:", error.message);
       return [];
@@ -287,6 +227,7 @@ export const db = {
 
   // BILLS
   async getBills(organisationId) {
+    if (!organisationId) { console.warn("getBills: organisationId required"); return []; }
     let q = supabase.from("bills").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -450,10 +391,12 @@ export const db = {
     } else {
       console.log("[Supabase] DELETE bill → ok", { id });
     }
+    return error || null; // Task 3.3 – return error so callers can detect failures
   },
 
   // BILL PAYMENTS (per-payment records for partial payments & method tracking)
   async getBillPayments(organisationId) {
+    if (!organisationId) { console.warn("getBillPayments: organisationId required"); return []; }
     let q = supabase.from("bill_payments").select("*").order("paid_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -513,6 +456,7 @@ export const db = {
 
   // PURCHASES
   async getPurchases(organisationId) {
+    if (!organisationId) { console.warn("getPurchases: organisationId required"); return []; }
     let q = supabase.from("purchases").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -624,6 +568,7 @@ export const db = {
 
   // TASKS
   async getTasks(organisationId) {
+    if (!organisationId) { console.warn("getTasks: organisationId required"); return []; }
     let q = supabase.from("tasks").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -716,6 +661,7 @@ export const db = {
 
   // CUSTOMERS
   async getCustomers(organisationId) {
+    if (!organisationId) { console.warn("getCustomers: organisationId required"); return []; }
     let q = supabase.from("customers").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -788,6 +734,7 @@ export const db = {
 
   // PRODUCTS / SERVICES
   async getProducts(organisationId) {
+    if (!organisationId) { console.warn("getProducts: organisationId required"); return []; }
     let q = supabase.from("products").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1070,7 +1017,9 @@ export const db = {
 
   // WORKERS — uuid primary key (gen_random_uuid()) in DB
   async getWorkers(organisationId) {
-    let q = supabase.from("workers").select("*");
+    // Exclude password column — hashed values have no use on the client
+    if (!organisationId) { console.warn("getWorkers: organisationId required"); return []; }
+    let q = supabase.from("workers").select("id, name, username, role, phone, salary_type, salary_amount, salary_cycle, opening_balance, organisation_id, created_at");
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
 
@@ -1083,10 +1032,11 @@ export const db = {
   },
 
   async addWorker(worker) {
+    const hashedPassword = await hashPasswordForStorage(worker.password);
     const payload = {
       name: worker.name,
       username: worker.username,
-      password: worker.password,
+      password: hashedPassword,
       role: worker.role || "worker",
       phone: worker.phone || null,
       salary_type: worker.salaryType || 'Monthly',
@@ -1096,11 +1046,11 @@ export const db = {
     };
     if (worker.organisationId) payload.organisation_id = worker.organisationId;
 
-    console.log("[Supabase] INSERT worker → starting", payload);
+    console.log("[Supabase] INSERT worker → starting", { ...payload, password: "[hashed]" });
     const { data, error } = await supabase
       .from("workers")
-      .insert([payload]) // id generated in DB via gen_random_uuid()
-      .select("*")
+      .insert([payload])
+      .select("id, name, username, role, phone, salary_type, salary_amount, salary_cycle, opening_balance, organisation_id, created_at")
       .single();
 
     if (error) {
@@ -1124,13 +1074,15 @@ export const db = {
     } else {
       console.log("[Supabase] DELETE worker → ok", { id });
     }
+    return error || null; // Task 3.3 – return error so callers can detect failures
   },
 
   async updateWorkerPassword(id, password) {
     console.log("[Supabase] UPDATE worker.password → starting", { id });
+    const hashedPassword = await hashPasswordForStorage(password);
     const { error } = await supabase
       .from("workers")
-      .update({ password })
+      .update({ password: hashedPassword })
       .eq("id", id);
 
     if (error) {
@@ -1144,7 +1096,7 @@ export const db = {
     const payload = {};
     if (updates.name !== undefined) payload.name = updates.name;
     if (updates.username !== undefined) payload.username = updates.username;
-    if (updates.password !== undefined) payload.password = updates.password;
+    if (updates.password !== undefined) payload.password = await hashPasswordForStorage(updates.password);
     if (updates.phone !== undefined) payload.phone = updates.phone;
     if (updates.salaryType !== undefined) payload.salary_type = updates.salaryType;
     if (updates.salaryAmount !== undefined) payload.salary_amount = updates.salaryAmount;
@@ -1199,7 +1151,9 @@ export const db = {
 
   // VENDORS
   async getVendors(organisationId) {
-    let q = supabase.from("vendors").select("*").order("created_at", { ascending: false });
+    // Exclude password column — hashed values have no use on the client
+    if (!organisationId) { console.warn("getVendors: organisationId required"); return []; }
+    let q = supabase.from("vendors").select("id, name, firm_name, username, phone, email, organisation_id, created_at").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
 
@@ -1211,25 +1165,26 @@ export const db = {
   },
 
   async addVendor(vendor) {
+    const hashedPassword = await hashPasswordForStorage(vendor.password);
     const payload = {
       name: vendor.name,
       firm_name: vendor.firmName || null,
       username: vendor.username,
-      password: vendor.password,
+      password: hashedPassword,
       phone: vendor.phone || null,
       email: vendor.email || null,
     };
     if (vendor.organisationId) payload.organisation_id = vendor.organisationId;
-    console.log("[Supabase] INSERT vendor → starting", payload);
+    console.log("[Supabase] INSERT vendor → starting", { ...payload, password: "[hashed]" });
     const { data, error } = await supabase
       .from("vendors")
       .insert([payload])
-      .select("*")
+      .select("id, name, firm_name, username, phone, email, organisation_id, created_at")
       .single();
 
     if (error) {
       console.error("[Supabase] addVendor error:", error.message, error.details);
-      throw new Error(error.message); // So caller can show it
+      throw new Error(error.message);
     }
     console.log("[Supabase] INSERT vendor → ok", { id: data.id });
     return { ...data, id: data.id, createdAt: data.created_at };
@@ -1241,15 +1196,17 @@ export const db = {
   },
 
   async updateVendorPassword(id, password) {
+    const hashedPassword = await hashPasswordForStorage(password);
     const { error } = await supabase
       .from("vendors")
-      .update({ password })
+      .update({ password: hashedPassword })
       .eq("id", id);
     if (error) console.error("updateVendorPassword:", error.message);
   },
 
   // VENDOR BILLS (bills FROM vendors TO our company)
   async getVendorBills(organisationId) {
+    if (!organisationId) { console.warn("getVendorBills: organisationId required"); return []; }
     let q = supabase.from("vendor_bills").select("*").order("created_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;
@@ -1329,6 +1286,7 @@ export const db = {
 
   // VENDOR PAYMENTS (what we pay to vendors)
   async getVendorPayments(organisationId) {
+    if (!organisationId) { console.warn("getVendorPayments: organisationId required"); return []; }
     let q = supabase.from("vendor_payments").select("*").order("paid_at", { ascending: false });
     if (organisationId) q = q.eq("organisation_id", organisationId);
     const { data, error } = await q;

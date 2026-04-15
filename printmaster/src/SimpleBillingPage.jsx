@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
+import { roundCurrency } from "./lib/money.js";
 import { db } from "./supabase.js";
 import { getBillPaymentInfo } from "./billingUtils.js";
 import { AddPaymentModal } from "./App.jsx";
@@ -118,6 +119,7 @@ export default function SimpleBillingPage({
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [paywallFeature, setPaywallFeature] = useState("");
+  const [isSaving, setIsSaving] = useState(false); // Task 3.1 – double-submit guard
 
   // ── Allocate "Payment In" bills to invoices (FIFO) so Paid column is correct ──
   // This handles both old data (no bill_payments) and new data (has bill_payments).
@@ -293,15 +295,15 @@ export default function SimpleBillingPage({
     const product = (products || []).find((p) => p.id === line.productId);
     const qty = Number(line.qty) || 1;
     const rate = Number(line.rate) || 0;
-    const subtotal = qty * rate;
+    const subtotal = roundCurrency(qty * rate);
     const taxRate = invoiceType !== "supply" ? Number(line.taxRate ?? product?.tax_rate ?? product?.taxRate ?? 0) : 0;
-    const taxAmount = subtotal * (taxRate / 100);
-    const amount = subtotal + taxAmount;
+    const taxAmount = roundCurrency(subtotal * (taxRate / 100));
+    const amount = roundCurrency(subtotal + taxAmount);
     return { ...line, product, qty, rate, subtotal, taxRate, taxAmount, amount, originalIndex };
   });
-  const subtotal = lineRows.reduce((s, row) => s + row.subtotal, 0);
-  const taxTotal = lineRows.reduce((s, row) => s + row.taxAmount, 0);
-  const total = subtotal + taxTotal;
+  const subtotal = roundCurrency(lineRows.reduce((s, row) => s + row.subtotal, 0));
+  const taxTotal = roundCurrency(lineRows.reduce((s, row) => s + row.taxAmount, 0));
+  const total = roundCurrency(subtotal + taxTotal);
 
   const addLine = () => Object.keys(items[0] || {}).length ? setItems((prev) => [...prev, defaultLineItem()]) : setItems([defaultLineItem()]);
   const handleAddItem = () => {
@@ -406,6 +408,7 @@ export default function SimpleBillingPage({
   };
 
   const createBill = async () => {
+    if (isSaving) return; // Task 3.1 – block concurrent submits
     if (!selectedParty) {
       showToast("Select or create a party first", "error");
       return;
@@ -452,7 +455,9 @@ export default function SimpleBillingPage({
       })),
       organisationId: user?.organisationId,
     };
-    const saved = await db.addBill(bill);
+    setIsSaving(true); // Task 3.1
+    try {
+      const saved = await db.addBill(bill);
     if (!saved) {
       showToast("Failed to save bill. Does it have too many complex items or invalid data?", "error");
       return; // Stop execution so the modal stays open with the error visible
@@ -491,8 +496,10 @@ export default function SimpleBillingPage({
             ]);
           }
         }
-      } catch {
-        // Ignore payment save errors on quick billing; bill itself is already saved.
+      } catch (payErr) {
+        // Task 3.2: payment failed after bill was saved — show warning so user can record manually
+        console.error("Advance payment save failed:", payErr);
+        showToast("⚠️ Bill saved, but advance payment could not be recorded. Please add it manually.", "error");
       }
     }
     if (!editingBillId) {
@@ -509,10 +516,23 @@ export default function SimpleBillingPage({
     setAdvanceMethod("cash");
     setWaPreview(finalBill);
     showToast(`Bill ${editingBillId ? "updated" : "created"}: ${id}`);
+    } catch (e) {
+      // Task 3.2: surface all unhandled bill-creation errors to the user
+      console.error("createBill error:", e);
+      showToast("Error saving bill: " + (e?.message || "Unknown error"), "error");
+    } finally {
+      setIsSaving(false); // Task 3.1
+    }
   };
 
   const deleteBill = async (billId) => {
-    await db.deleteBill(billId);
+    // Task 3.3 – check DB response BEFORE updating local state to prevent ghost deletes
+    const err = await db.deleteBill(billId);
+    if (err) {
+      showToast("Failed to delete bill: " + (err.message || "Unknown error"), "error");
+      setConfirmDeleteBill(null);
+      return;
+    }
     setBills((prev) => prev.filter((b) => b.id !== billId));
     if (waPreview?.id === billId) setWaPreview(null);
     setConfirmDeleteBill(null);
@@ -905,8 +925,25 @@ export default function SimpleBillingPage({
                 <div style={{ textAlign: "right", minWidth: 230 }}>
                   <div style={{ display: "grid", gap: 8, fontSize: ".84rem", color: "var(--text2)", marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><span>Taxable Amount</span><strong>{fmtCur(subtotal)}</strong></div>
-                    {invoiceType !== "supply" ? <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><span>SGST @{(lineRows.reduce((s,r) => s + r.taxRate, 0) / Math.max(lineRows.length,1) / 2).toFixed(1)}%</span><strong>{fmtCur(taxTotal / 2)}</strong></div> : null}
-                    {invoiceType !== "supply" ? <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><span>CGST @{(lineRows.reduce((s,r) => s + r.taxRate, 0) / Math.max(lineRows.length,1) / 2).toFixed(1)}%</span><strong>{fmtCur(taxTotal / 2)}</strong></div> : null}
+                    {invoiceType !== "supply" && taxTotal > 0
+                      ? Object.entries(
+                          lineRows.reduce((acc, row) => {
+                            if (row.taxRate > 0 && row.taxAmount > 0) {
+                              acc[row.taxRate] = roundCurrency((acc[row.taxRate] || 0) + row.taxAmount);
+                            }
+                            return acc;
+                          }, {})
+                        ).flatMap(([rate, taxAmt]) => [
+                          <div key={`sgst-${rate}`} style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                            <span>SGST @{(Number(rate) / 2).toFixed(1)}%</span>
+                            <strong>{fmtCur(roundCurrency(taxAmt / 2))}</strong>
+                          </div>,
+                          <div key={`cgst-${rate}`} style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                            <span>CGST @{(Number(rate) / 2).toFixed(1)}%</span>
+                            <strong>{fmtCur(roundCurrency(taxAmt / 2))}</strong>
+                          </div>,
+                        ])
+                      : null}
                   </div>
                   <div style={{ marginBottom: 10, fontSize: ".8rem", color: "var(--text3)" }}>
                     <div style={{ marginBottom: 4 }}>Advance received (optional)</div>
@@ -939,7 +976,7 @@ export default function SimpleBillingPage({
             </div>
             <div className="modal-footer">
               <button className="btn btn-ghost" onClick={handleCloseAttempt}>Cancel</button>
-              <button className="btn btn-primary" onClick={createBill}>{editingBillId ? "Update Bill" : "Generate Bill"}</button>
+              <button className="btn btn-primary" onClick={createBill} disabled={isSaving} style={isSaving ? { opacity: 0.6, cursor: "not-allowed" } : {}}>{isSaving ? "Saving…" : editingBillId ? "Update Bill" : "Generate Bill"}</button>
             </div>
           </div>
         </div>

@@ -1,4 +1,5 @@
 /* eslint-disable react/prop-types */
+import { useMemo } from "react"; // Task 4.1 – memoize dashboard computations
 import { getBillPaymentInfo } from "./billingUtils.js";
 
 const fmtCur = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -22,18 +23,60 @@ function Icon({ name, size = 16, color = "currentColor" }) {
 
 export default function ShopDashboard({ bills, tasks, workers, vendors, billPayments, totalRevenue, totalPending, paidBills, unpaidBills, pendingTasks, completedTasks, setPage, brand, onViewInvoice, setAdvancedDraft }) {
   const todayStr = new Date().toISOString().slice(0, 10);
-  const validBills = bills.filter(b => b.docType !== "Payment In");
-  const overdueBills = validBills.filter(b => !getBillPaymentInfo(b, billPayments).isPaid && (b.dueDate || b.due_date) && (b.dueDate || b.due_date) < todayStr);
-  const billsToday = validBills.filter(b => b.createdAt && b.createdAt.startsWith(todayStr));
-  const todayBillsCount = billsToday.length;
-  const todaySales = billsToday.reduce((s, b) => s + (b.total || 0), 0);
-  const partialBills = validBills.filter(b => getBillPaymentInfo(b, billPayments).status === "Partially Paid");
-  const methodTotals = (billPayments || []).reduce((acc, p) => { const m = (p.method || "cash").toLowerCase(); acc[m] = (acc[m] || 0) + (Number(p.amount) || 0); return acc; }, {});
-  const workerStats = workers.map(w => ({ worker: w, completed: tasks.filter(t => (t.worker === w.id || t.worker_id === w.id) && t.status === "Completed").length })).sort((a, b) => b.completed - a.completed);
-  const uniqueCustomers = validBills.reduce((set, b) => (b.customer ? set.add(b.customer) : set), new Set()).size;
+  const thisMonthKey = new Date().toISOString().slice(0, 7);
 
-  const monthlyRevenue = (() => {
+  // ── Task 4.1: memoize all expensive computations ──────────────────────────
+  const validBills = useMemo(
+    () => (bills || []).filter(b => b.docType !== "Payment In"),
+    [bills]
+  );
+
+  const overdueBills = useMemo(
+    () => validBills.filter(b => !getBillPaymentInfo(b, billPayments).isPaid && (b.dueDate || b.due_date) && (b.dueDate || b.due_date) < todayStr),
+    [validBills, billPayments, todayStr]
+  );
+
+  const { billsToday, todayBillsCount, todaySales } = useMemo(() => {
+    const billsToday = validBills.filter(b => b.createdAt && b.createdAt.startsWith(todayStr));
+    return {
+      billsToday,
+      todayBillsCount: billsToday.length,
+      todaySales: billsToday.reduce((s, b) => s + (b.total || 0), 0),
+    };
+  }, [validBills, todayStr]);
+
+  const partialBills = useMemo(
+    () => validBills.filter(b => getBillPaymentInfo(b, billPayments).status === "Partially Paid"),
+    [validBills, billPayments]
+  );
+
+  const methodTotals = useMemo(
+    () => (billPayments || []).reduce((acc, p) => {
+      const m = (p.method || "cash").toLowerCase();
+      acc[m] = (acc[m] || 0) + (Number(p.amount) || 0);
+      return acc;
+    }, {}),
+    [billPayments]
+  );
+
+  // O(workers × tasks) scan – memoized so it only recomputes when inputs change
+  const workerStats = useMemo(
+    () => (workers || []).map(w => ({
+      worker: w,
+      completed: (tasks || []).filter(t => (t.worker === w.id || t.worker_id === w.id) && t.status === "Completed").length,
+    })).sort((a, b) => b.completed - a.completed),
+    [workers, tasks]
+  );
+
+  const uniqueCustomers = useMemo(
+    () => validBills.reduce((set, b) => (b.customer ? set.add(b.customer) : set), new Set()).size,
+    [validBills]
+  );
+
+  // monthlyRevenue also pre-computes thisMonthCount to avoid re-scanning in JSX (Task 4.1)
+  const { monthlyRevenue, maxRev, thisMonthCount } = useMemo(() => {
     const months = [];
+    let thisMonthCount = 0;
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
       d.setMonth(d.getMonth() - i);
@@ -41,10 +84,13 @@ export default function ShopDashboard({ bills, tasks, workers, vendors, billPaym
       const label = d.toLocaleString("en-IN", { month: "short" });
       const rev = validBills.filter(b => (b.createdAt || "").startsWith(key)).reduce((s, b) => s + (b.total || 0), 0);
       months.push({ label, rev });
+      if (key === thisMonthKey) thisMonthCount = months[months.length - 1].rev > 0
+        ? validBills.filter(b => (b.createdAt || "").startsWith(key)).length
+        : 0;
     }
-    return months;
-  })();
-  const maxRev = Math.max(...monthlyRevenue.map(m => m.rev), 1);
+    return { monthlyRevenue: months, maxRev: Math.max(...months.map(m => m.rev), 1), thisMonthCount };
+  }, [validBills, thisMonthKey]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const card = (icon, iconBg, iconColor, gradFrom, gradTo, badgeBg, badgeText, badgeLabel, value, label, sub) => (
     <div className="card" style={{ position: "relative", overflow: "hidden", paddingTop: 20, cursor: "default" }}>
@@ -136,8 +182,9 @@ export default function ShopDashboard({ bills, tasks, workers, vendors, billPaym
           </div>
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
             <div style={{ fontSize: ".7rem", color: "var(--text3)", fontWeight: 700, marginBottom: 4 }}>6-MONTH TREND</div>
+            {/* Task 4.1: use pre-computed thisMonthCount — no extra scan of validBills in JSX */}
             <div style={{ fontWeight: 800, color: "#ea580c", fontSize: ".9rem" }}>
-              {validBills.filter(b => (b.createdAt || "").startsWith(new Date().toISOString().slice(0, 7))).length} bills this month
+              {thisMonthCount} bills this month
             </div>
           </div>
           <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>

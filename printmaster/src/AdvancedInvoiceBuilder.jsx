@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { roundCurrency } from "./lib/money.js";
 
 // Utility formatting
 const fmtCur = (n) => `₹ ${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -94,6 +95,7 @@ export default function AdvancedInvoiceBuilder({
   const [globalDiscount, setGlobalDiscount] = useState({ type: "amount", value: initialData?.discount || 0 }); 
   const [additionalCharges, setAdditionalCharges] = useState(initialData?.additionalCharges || 0);
   const [isAutoRoundOff, setIsAutoRoundOff] = useState(initialData?.roundOff ? true : false);
+  const [manualRoundOff, setManualRoundOff] = useState(0); // Task 3.4 – manual override
   const [amountReceived, setAmountReceived] = useState(initialData?.amountReceived || "");
   const [paymentMode, setPaymentMode] = useState(initialData?.paymentMode || "Cash"); 
   
@@ -141,51 +143,74 @@ export default function AdvancedInvoiceBuilder({
   // Calculations
   const calculations = useMemo(() => {
     let subtotal = 0;
-    let totalTax = 0;
+    let totalTaxOnItems = 0; // item-level tax BEFORE global discount
     let totalDiscountLocal = 0;
 
     const calculatedItems = items.map(it => {
-      const baseAmount = Number(it.qty) * Number(it.rate);
+      const baseAmount = roundCurrency(Number(it.qty) * Number(it.rate));
       let itemDiscount = 0;
       if (it.discountType === "perc") {
-        itemDiscount = baseAmount * (Number(it.discountValue) / 100);
+        itemDiscount = roundCurrency(baseAmount * (Number(it.discountValue) / 100));
       } else {
-        itemDiscount = Number(it.discountValue);
+        itemDiscount = roundCurrency(Number(it.discountValue));
       }
       
-      const taxableAmount = Math.max(0, baseAmount - itemDiscount);
-      const taxAmount = isGstBill ? taxableAmount * (Number(it.taxRate) / 100) : 0;
-      const finalAmount = taxableAmount + taxAmount;
+      const taxableAmount = roundCurrency(Math.max(0, baseAmount - itemDiscount));
+      const taxAmount = isGstBill ? roundCurrency(taxableAmount * (Number(it.taxRate) / 100)) : 0;
+      const finalAmount = roundCurrency(taxableAmount + taxAmount);
       
       subtotal += baseAmount;
       totalDiscountLocal += itemDiscount;
-      totalTax += taxAmount;
+      totalTaxOnItems += taxAmount;
 
       return { ...it, baseAmount, itemDiscount, taxableAmount, taxAmount, amount: finalAmount };
     });
 
-    let taxableAmountValue = subtotal - totalDiscountLocal + Number(additionalCharges);
-    
-    // Global discount
+    subtotal = roundCurrency(subtotal);
+    totalDiscountLocal = roundCurrency(totalDiscountLocal);
+    totalTaxOnItems = roundCurrency(totalTaxOnItems);
+
+    // Item-level taxable base (after per-item discounts, before global discount)
+    // This is the base used for GST proportional calculation
+    const itemTaxableBase = roundCurrency(subtotal - totalDiscountLocal);
+
+    // Global discount — applied to itemTaxableBase BEFORE re-computing GST
+    // Per GST law: discounts reduce the taxable value, therefore GST must be
+    // recomputed on the post-discount amount.
     let globalDiscAmount = 0;
     if (globalDiscount.type === "perc") {
-      globalDiscAmount = taxableAmountValue * (Number(globalDiscount.value) / 100);
+      globalDiscAmount = roundCurrency(itemTaxableBase * (Number(globalDiscount.value) / 100));
     } else {
-      globalDiscAmount = Number(globalDiscount.value);
+      globalDiscAmount = roundCurrency(Number(globalDiscount.value));
     }
 
-    let rawTotal = taxableAmountValue - globalDiscAmount + totalTax;
+    // Post-discount taxable base
+    const postDiscountBase = roundCurrency(Math.max(0, itemTaxableBase - globalDiscAmount));
+
+    // Proportionally rescale mixed-rate item taxes to the post-discount base.
+    // e.g. ₹1000 base → 10% global disc → ₹900 base → GST rescales from 180 → 162
+    const totalTax = isGstBill && itemTaxableBase > 0
+      ? roundCurrency((totalTaxOnItems / itemTaxableBase) * postDiscountBase)
+      : (isGstBill ? totalTaxOnItems : 0);
+
+    // taxableAmountValue (displayed as "Taxable Amount") = post-discount base + additionalCharges
+    const taxableAmountValue = roundCurrency(postDiscountBase + Number(additionalCharges));
+
+    let rawTotal = roundCurrency(taxableAmountValue + totalTax);
     
     let finalRoundOff = 0;
     if (isAutoRoundOff && rawTotal !== Math.round(rawTotal)) {
-        finalRoundOff = Math.round(rawTotal) - rawTotal;
+      finalRoundOff = roundCurrency(Math.round(rawTotal) - rawTotal);
+    } else if (!isAutoRoundOff && manualRoundOff) {
+      // Task 3.4 – use manually-entered round-off value
+      finalRoundOff = roundCurrency(Number(manualRoundOff) || 0);
     }
     
-    let grandTotal = rawTotal + finalRoundOff;
-    let balance = grandTotal - Number(amountReceived || 0);
+    let grandTotal = roundCurrency(rawTotal + finalRoundOff);
+    let balance = roundCurrency(grandTotal - Number(amountReceived || 0));
 
     return { calculatedItems, subtotal, totalDiscountLocal, taxableAmountValue, totalTax, globalDiscAmount, rawTotal, finalRoundOff, grandTotal, balance };
-  }, [items, globalDiscount, additionalCharges, isAutoRoundOff, amountReceived]);
+  }, [items, globalDiscount, additionalCharges, isAutoRoundOff, manualRoundOff, amountReceived, isGstBill]);
 
   const updateItem = (index, field, value) => {
     const nextItems = [...items];
@@ -412,7 +437,7 @@ export default function AdvancedInvoiceBuilder({
                                           <div 
                                             key={p.id} 
                                             onClick={() => { setSelectedParty(p); setShowPartyDropdown(false); setPartySearch(""); }}
-                                            style={{ display:"flex", padding:"10px 12px", borderBottom:"1px solid #f3f4f6", cursor:"pointer", fontSize:"13px", cursor:"pointer" }}
+                                            style={{ display:"flex", padding:"10px 12px", borderBottom:"1px solid #f3f4f6", cursor:"pointer", fontSize:"13px" }}
                                             onMouseOver={e => e.currentTarget.style.background="#f9fafb"}
                                             onMouseOut={e => e.currentTarget.style.background="white"}
                                           >
@@ -672,7 +697,7 @@ export default function AdvancedInvoiceBuilder({
                                   <div style={{ background:"#f3f4f6", border:"1px solid #e5e7eb", borderRadius:"4px", padding:"4px 8px", fontSize:"13px", color:"#6b7280" }}>+ Add</div>
                                   <span style={{ fontSize:"13px", color:"#111827", display:"flex", alignItems:"center", gap:"4px" }}>
                                       <span>₹</span>
-                                      <input type="number" step="0.01" value={calculations.finalRoundOff} onChange={e => setIsAutoRoundOff(false) || setRoundOff(e.target.value)} style={{ width:"50px", padding:"2px", border:"none", background:"transparent", outline:"none", textAlign:"right" }} disabled={isAutoRoundOff} />
+                                      <input type="number" step="0.01" value={calculations.finalRoundOff} onChange={e => { setIsAutoRoundOff(false); setManualRoundOff(e.target.value); }} style={{ width:"50px", padding:"2px", border:"none", background:"transparent", outline:"none", textAlign:"right" }} disabled={isAutoRoundOff} />
                                   </span>
                               </div>
                           </div>

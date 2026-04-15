@@ -16,14 +16,11 @@ import PaymentInBuilder from "./PaymentInBuilder.jsx";
 import LiveAlertsPage from "./LiveAlertsPage.jsx";
 import StaffPage from "./StaffPage.jsx";
 import VoiceAssistant from "./VoiceAssistant.jsx";
+// Task 5.1 – Thin context layer
+import { AppProvider } from "./contexts/AppContext.jsx";
+// Task 5.4 – Per-page error isolation
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
-// ── In-memory store ───────────────────────────────────────────────────────────
-// Super Admin (no organisation) – your personal login
-const ADMIN = { username: "Nihal", password: "Nihal676", role: "admin", name: "Nihal" };
-const WORKERS_INIT = [
-  { id: "w1", username: "ravi", password: "ravi123", name: "Ravi Kumar", role: "worker" },
-  { id: "w2", username: "sunita", password: "sunita123", name: "Sunita Devi", role: "worker" },
-];
 
 // ── Default brand/settings (hard-coded for live use) ─────────────────────────
 // These values are used both as in-memory defaults and as the base when
@@ -135,9 +132,21 @@ const getInvoiceWhatsAppUrl = ({ bill, brand, billPayments = [] }) => {
   return `https://wa.me/${target}?text=${encodeURIComponent(msg)}`;
 };
 
+// Task 4.3 – Shared AudioContext (one per page) so we don't leak a new
+// AudioContext object on every sound playback.
+let _sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!_sharedAudioCtx || _sharedAudioCtx.state === "closed") {
+    _sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // Resume if suspended (browser autoplay policy)
+  if (_sharedAudioCtx.state === "suspended") _sharedAudioCtx.resume();
+  return _sharedAudioCtx;
+}
+
 export const playAlertSound = () => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = getAudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -153,7 +162,7 @@ export const playAlertSound = () => {
 
 export const playSuccessSound = () => {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = getAudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -1254,14 +1263,6 @@ export default function App() {
   const [organisations, setOrganisations] = useState([]);
   const [approvedOrganisations, setApprovedOrganisations] = useState([]); // kept for compatibility (no longer used by LoginPage)
   const [products, setProducts] = useState([]);
-  // Admin password lives only in React state (no localStorage)
-  const [adminPassword, setAdminPassword] = useState(ADMIN.password);
-  const changeAdminPassword = (newPass) => {
-    setAdminPassword(newPass);
-    try {
-      localStorage.setItem("pm_admin_password", newPass);
-    } catch {}
-  };
 
   const defaultPageForRole = (role, organisationId) => {
     if (role === "vendor") return "vendor-dashboard";
@@ -1270,26 +1271,43 @@ export default function App() {
     return "dashboard";
   };
 
-  // Restore logged-in user + super-admin password from localStorage (so refresh doesn't log out/reset)
+  // Restore logged-in user from localStorage (so refresh doesn't log out)
   useEffect(() => {
-    try {
-      const savedAdminPass = localStorage.getItem("pm_admin_password");
-      if (savedAdminPass) {
-        setAdminPassword(savedAdminPass);
-      }
+    (async () => {
+      try {
+        // Clean up legacy admin password key if present
+        localStorage.removeItem("pm_admin_password");
 
-      const raw = localStorage.getItem("pm_user");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.username && parsed.role) {
-          setUser(parsed);
-          const nextPage = defaultPageForRole(parsed.role, parsed.organisationId ?? null);
-          setPage(defaultPageForRole(parsed.role, parsed.organisationId ?? null));
+        const raw = localStorage.getItem("pm_user");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.username && parsed.role) {
+            // Re-validate session: ensure the org is still approved and accessible
+            let valid = true;
+            if (parsed.organisationId) {
+              try {
+                const { data: org } = await supabase
+                  .from("organisations")
+                  .select("id, status, access_enabled")
+                  .eq("id", parsed.organisationId)
+                  .eq("status", "approved")
+                  .eq("access_enabled", true)
+                  .maybeSingle();
+                valid = !!org;
+              } catch { /* Network error — allow cached session for offline tolerance */ }
+            }
+            if (valid) {
+              setUser(parsed);
+              setPage(defaultPageForRole(parsed.role, parsed.organisationId ?? null));
+            } else {
+              localStorage.removeItem("pm_user");
+            }
+          }
         }
+      } catch (e) {
+        console.error("restoreUser:", e);
       }
-    } catch (e) {
-      console.error("restoreUser:", e);
-    }
+    })();
   }, []);
 
   // Allow Login to show even if DB is slow
@@ -1302,12 +1320,14 @@ export default function App() {
   // Load data when user is set (org-scoped for org users, organisations only for Super Admin)
   useEffect(() => {
     if (!user) return;
+    let isMounted = true; // Task 3.5 – prevent state updates after unmount
     const orgId = user.organisationId ?? null;
     async function loadAll() {
       setDbLoading(true);
       if (orgId === null) {
         // Super Admin: only load organisations for approvals panel
         const orgs = await db.getOrganisations();
+        if (!isMounted) return;
         setOrganisations(orgs || []);
         setBills([]);
         setPurchases([]);
@@ -1333,6 +1353,7 @@ export default function App() {
           db.loadBrand(DEFAULT_BRAND, orgId),
           db.getProducts(orgId),
         ]);
+        if (!isMounted) return; // Task 3.5 – bail if user changed while loading
         setBills(b);
         setPurchases(p);
         setBillPayments(bp || []);
@@ -1375,11 +1396,17 @@ export default function App() {
       setDbLoading(false);
     }
     loadAll();
+    return () => { isMounted = false; }; // Task 3.5 – cleanup
   }, [user?.id, user?.organisationId]);
 
 
   const showToast = (msg, type = "success") => setToast({ msg, type });
-  const addNotification = (msg) => setNotifications(n => [{ id: Date.now(), msg, read: false, time: now() }, ...n]);
+  const addNotification = (msg) => setNotifications(n => {
+    // Task 4.5 – cap the array at 100 entries so memory never grows unboundedly
+    const MAX_NOTIFICATIONS = 100;
+    const updated = [{ id: Date.now(), msg, read: false, time: now() }, ...n];
+    return updated.length > MAX_NOTIFICATIONS ? updated.slice(0, MAX_NOTIFICATIONS) : updated;
+  });
 
   // Smart automatic notifications (overdue bills, tasks due soon, today's summary)
   const hasRunSmartNotify = useRef(false);
@@ -1628,7 +1655,7 @@ export default function App() {
         <style>{CSS}</style>
         <LoginPage
           brand={brand}
-          adminPassword={adminPassword}
+          adminPassword={undefined}
           onLogin={u => {
             const simpleUser = { id: u.id, name: u.name, role: u.role, username: u.username, organisationId: u.organisationId ?? null };
             setUser(simpleUser);
@@ -1647,33 +1674,35 @@ export default function App() {
     );
   }
 
+  // Task 5.4 – Each page is isolated in its own ErrorBoundary so a crash in one
+  // view cannot take down the entire application shell.
   const pages = {
-    dashboard: <ShopDashboard bills={bills} tasks={tasks} workers={workers} vendors={vendors} billPayments={billPayments} totalRevenue={totalRevenue} totalPending={totalPending} paidBills={paidBills} unpaidBills={unpaidBills} pendingTasks={pendingTasks} completedTasks={completedTasks} setPage={setPage} brand={brand} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} />,
-    "live-alerts": <LiveAlertsPage tasks={tasks} products={products} bills={bills} billPayments={billPayments} onViewCustomer={(c) => { setJumpToCustomer(c); setPage("customers"); }} onNavigate={setPage} />,
-    billing: <SimpleBillingPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} customers={customers} setCustomers={setCustomers} brand={brand} setBrand={setBrand} user={user} products={products} initialDraft={initialDraft} setInitialDraft={setInitialDraft} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} />,
-    products: <EnhancedProductsPage products={products} setProducts={setProducts} showToast={showToast} user={user} />,
-    tasks: <TasksPage tasks={tasks} setTasks={setTasks} workers={workers} vendors={vendors} user={user} showToast={showToast} addNotification={addNotification} />,
-    workers: <StaffPage workers={workers} vendors={vendors} setWorkers={setWorkers} tasks={tasks} showToast={showToast} user={user} />,
-    vendors: <VendorsPage vendors={vendors} workers={workers} setVendors={setVendors} vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} showToast={showToast} brand={brand} user={user} />,
-    payments: <PaymentsPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} user={user} />,
-    purchases: <PurchasesPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} />,
-    "posted-bills": <PostedBillsPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} />,
-    customers: <EnhancedCustomersPage customers={customers} setCustomers={setCustomers} bills={bills} billPayments={billPayments} showToast={showToast} user={user} setAdvancedDraft={setAdvancedDraft} onViewInvoice={setViewingInvoiceId} jumpToCustomer={jumpToCustomer} setJumpToCustomer={setJumpToCustomer} />,
-    reports: <ReportsPage bills={bills} customers={customers} tasks={tasks} />,
-    "ai-agent": <AiAgentPage products={products} bills={bills} customers={customers} showToast={showToast} setBills={setBills} sellerName={user?.name} setPage={setPage} setInitialDraft={setInitialDraft} user={user} />,
-    "org-approvals": <OrgApprovalsPage organisations={organisations} onRefresh={refreshOrganisations} showToast={showToast} />,
-    admin: <AdminPanel bills={bills} tasks={tasks} workers={workers} vendors={vendors} vendorBills={vendorBills} />,
-    settings: <SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} adminPassword={adminPassword} changeAdminPassword={changeAdminPassword} workers={workers} setWorkers={setWorkers} user={user} />,
-    "worker-dashboard": <WorkerDashboard tasks={tasks} user={user} />,
-    "worker-tasks": <WorkerTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} />,
-    "vendor-dashboard": <VendorDashboard tasks={tasks} user={user} vendorBills={vendorBills} />,
-    "vendor-tasks": <VendorTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} />,
-    "vendor-bills": <VendorBillsPage vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} user={user} showToast={showToast} brand={brand} />,
-    "gst-suite": <GstSuitePage setPage={setPage} />,
-    "gst-finder": <GstFinderPage user={user} showToast={showToast} />,
-    "e-invoice": <EInvoicePage bills={bills} user={user} showToast={showToast} />,
-    "e-waybill": <EWayBillPage bills={bills} user={user} showToast={showToast} />,
-    "gst-filing": <GstFilingPage bills={bills} user={user} showToast={showToast} />,
+    dashboard: <ErrorBoundary name="Dashboard"><ShopDashboard bills={bills} tasks={tasks} workers={workers} vendors={vendors} billPayments={billPayments} totalRevenue={totalRevenue} totalPending={totalPending} paidBills={paidBills} unpaidBills={unpaidBills} pendingTasks={pendingTasks} completedTasks={completedTasks} setPage={setPage} brand={brand} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} /></ErrorBoundary>,
+    "live-alerts": <ErrorBoundary name="Live Alerts"><LiveAlertsPage tasks={tasks} products={products} bills={bills} billPayments={billPayments} onViewCustomer={(c) => { setJumpToCustomer(c); setPage("customers"); }} onNavigate={setPage} /></ErrorBoundary>,
+    billing: <ErrorBoundary name="Billing"><SimpleBillingPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} customers={customers} setCustomers={setCustomers} brand={brand} setBrand={setBrand} user={user} products={products} initialDraft={initialDraft} setInitialDraft={setInitialDraft} onViewInvoice={setViewingInvoiceId} setAdvancedDraft={setAdvancedDraft} /></ErrorBoundary>,
+    products: <ErrorBoundary name="Products"><EnhancedProductsPage products={products} setProducts={setProducts} showToast={showToast} user={user} /></ErrorBoundary>,
+    tasks: <ErrorBoundary name="Tasks"><TasksPage tasks={tasks} setTasks={setTasks} workers={workers} vendors={vendors} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    workers: <ErrorBoundary name="Staff"><StaffPage workers={workers} vendors={vendors} setWorkers={setWorkers} tasks={tasks} showToast={showToast} user={user} /></ErrorBoundary>,
+    vendors: <ErrorBoundary name="Vendors"><VendorsPage vendors={vendors} workers={workers} setVendors={setVendors} vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} showToast={showToast} brand={brand} user={user} /></ErrorBoundary>,
+    payments: <ErrorBoundary name="Payments"><PaymentsPage bills={bills} setBills={setBills} billPayments={billPayments} setBillPayments={setBillPayments} showToast={showToast} user={user} /></ErrorBoundary>,
+    purchases: <ErrorBoundary name="Purchases"><PurchasesPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} /></ErrorBoundary>,
+    "posted-bills": <ErrorBoundary name="Posted Bills"><PostedBillsPage purchases={purchases} setPurchases={setPurchases} showToast={showToast} user={user} /></ErrorBoundary>,
+    customers: <ErrorBoundary name="Customers"><EnhancedCustomersPage customers={customers} setCustomers={setCustomers} bills={bills} billPayments={billPayments} showToast={showToast} user={user} setAdvancedDraft={setAdvancedDraft} onViewInvoice={setViewingInvoiceId} jumpToCustomer={jumpToCustomer} setJumpToCustomer={setJumpToCustomer} /></ErrorBoundary>,
+    reports: <ErrorBoundary name="Reports"><ReportsPage bills={bills} customers={customers} tasks={tasks} /></ErrorBoundary>,
+    "ai-agent": <ErrorBoundary name="AI Agent"><AiAgentPage products={products} bills={bills} customers={customers} showToast={showToast} setBills={setBills} sellerName={user?.name} setPage={setPage} setInitialDraft={setInitialDraft} user={user} /></ErrorBoundary>,
+    "org-approvals": <ErrorBoundary name="Org Approvals"><OrgApprovalsPage organisations={organisations} onRefresh={refreshOrganisations} showToast={showToast} /></ErrorBoundary>,
+    admin: <ErrorBoundary name="Admin"><AdminPanel bills={bills} tasks={tasks} workers={workers} vendors={vendors} vendorBills={vendorBills} /></ErrorBoundary>,
+    settings: <ErrorBoundary name="Settings"><SettingsPage brand={brand} setBrand={setBrand} showToast={showToast} workers={workers} setWorkers={setWorkers} user={user} /></ErrorBoundary>,
+    "worker-dashboard": <ErrorBoundary name="Worker Dashboard"><WorkerDashboard tasks={tasks} user={user} /></ErrorBoundary>,
+    "worker-tasks": <ErrorBoundary name="Worker Tasks"><WorkerTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    "vendor-dashboard": <ErrorBoundary name="Vendor Dashboard"><VendorDashboard tasks={tasks} user={user} vendorBills={vendorBills} /></ErrorBoundary>,
+    "vendor-tasks": <ErrorBoundary name="Vendor Tasks"><VendorTasks tasks={tasks} setTasks={setTasks} user={user} showToast={showToast} addNotification={addNotification} /></ErrorBoundary>,
+    "vendor-bills": <ErrorBoundary name="Vendor Bills"><VendorBillsPage vendorBills={vendorBills} setVendorBills={setVendorBills} vendorPayments={vendorPayments} setVendorPayments={setVendorPayments} user={user} showToast={showToast} brand={brand} /></ErrorBoundary>,
+    "gst-suite": <ErrorBoundary name="GST Suite"><GstSuitePage setPage={setPage} /></ErrorBoundary>,
+    "gst-finder": <ErrorBoundary name="GST Finder"><GstFinderPage user={user} showToast={showToast} /></ErrorBoundary>,
+    "e-invoice": <ErrorBoundary name="E-Invoice"><EInvoicePage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
+    "e-waybill": <ErrorBoundary name="E-Way Bill"><EWayBillPage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
+    "gst-filing": <ErrorBoundary name="GST Filing"><GstFilingPage bills={bills} user={user} showToast={showToast} /></ErrorBoundary>,
   };
 
   const titles = { dashboard:"Dashboard", "live-alerts":"Live Alerts 🐒", billing:"Billing", products:"Products / Services", "ai-agent":"🤖 AI Agent", tasks:"Task Management", workers:"Staff & Payroll", vendors:"Vendors", payments:"Payments", purchases:"Purchases", "posted-bills":"Posted Bills", customers:"Customers", reports:"Revenue Reports", "org-approvals":"Org Approvals", admin:"Admin Panel", settings:"Settings", "worker-dashboard":"My Dashboard", "worker-tasks":"My Tasks", "vendor-dashboard":"Vendor Dashboard", "vendor-tasks":"My Tasks", "vendor-bills":"Create Bill", "gst-suite":"💼 GST Suite", "gst-finder":"🔍 GST Finder", "e-invoice":"🧾 E-Invoice Generator", "e-waybill":"🚛 E-Way Bill", "gst-filing":"📊 GST Filing" };
@@ -1708,7 +1737,13 @@ export default function App() {
     return parts.join('');
   })();
 
+  // Task 5.1 – Context values passed to AppProvider so descendant components
+  // can opt-in to useAuth() / useData() without needing these props drilled down.
+  const authValue = { user, setUser, page, setPage, dark, setDark, showToast, notifications, setNotifications, dbLoading };
+  const dataValue = { bills, setBills, customers, setCustomers, workers, setWorkers, vendors, setVendors, tasks, setTasks, purchases, setPurchases, products, setProducts, vendorBills, setVendorBills, billPayments, setBillPayments, vendorPayments, setVendorPayments, organisations, setOrganisations, brand, setBrand };
+
   return (
+    <AppProvider auth={authValue} data={dataValue}>
     <><style>{CSS}</style>{appearanceStyle && <style>{appearanceStyle}</style>}
       <div className="app-layout">
         {sidebarOpen && <div className="s-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -1802,7 +1837,12 @@ export default function App() {
             })}
           </nav>
           <div className="s-footer">
-            <div className="user-chip" onClick={() => { setUser(null); localStorage.removeItem("pm_user"); setPage("dashboard"); }}>
+            <div className="user-chip" onClick={() => {
+              setUser(null);
+              localStorage.removeItem("pm_user");
+              localStorage.removeItem("pm_admin_password");
+              setPage("dashboard");
+            }}>
               <div className="u-av">{user.name[0]}</div>
               <div className="flex-1"><div className="u-name">{user.name}</div><div className="u-role">{user.role === "admin" ? "Administrator" : user.role === "vendor" ? "Vendor" : "Worker"}</div></div>
               <Icon name="logout" size={14} color="var(--text3)" />
@@ -1854,7 +1894,7 @@ export default function App() {
           </div>
         </div>
       </div>
-      
+      {/* ── Global Overlays: modals, toasts, voice assistant ── */}
       {advancedDraft?.docType && (
         (advancedDraft.docType === "Payment In" || advancedDraft.doc_type === "Payment In") ? (
            <PaymentInBuilder
@@ -2019,12 +2059,13 @@ export default function App() {
           }
         }}
       />
-    </>
+      </>
+    </AppProvider>
   );
 }
 
 // ── Login (single page for everyone) ──────────────────────────────────────────
-function LoginPage({ brand, adminPassword, onLogin }) {
+function LoginPage({ brand, onLogin }) {
   const [mode, setMode] = useState("username"); // username | email
   const [form, setForm] = useState({ username: "", password: "" });
   const [emailAuth, setEmailAuth] = useState({ email: "", otp: "", step: "enterEmail" }); // enterEmail | enterOtp
@@ -2081,7 +2122,7 @@ function LoginPage({ brand, adminPassword, onLogin }) {
     setLoading(true);
     setErr("");
     try {
-      const u = await db.loginWithCredentials(form.username, form.password, adminPassword);
+      const u = await db.loginWithCredentials(form.username, form.password);
       if (u) {
         onLogin(u);
       } else {
@@ -2237,14 +2278,16 @@ function LoginPage({ brand, adminPassword, onLogin }) {
     setLoading(true);
     setErr("");
     try {
-      // Update password in app tables where email matches (org_admins > workers > vendors).
-      const up1 = await supabase.from("org_admins").update({ password: np }).eq("email", email);
+      // Hash the new password server-side before writing to any table
+      const { hashPasswordForStorage } = await import("./supabase.js");
+      const hashed = await hashPasswordForStorage(np);
+      const up1 = await supabase.from("org_admins").update({ password: hashed }).eq("email", email);
       if (up1.error) throw new Error(up1.error.message);
       if ((up1.count || 0) === 0) {
-        const up2 = await supabase.from("workers").update({ password: np }).eq("email", email);
+        const up2 = await supabase.from("workers").update({ password: hashed }).eq("email", email);
         if (up2.error) throw new Error(up2.error.message);
         if ((up2.count || 0) === 0) {
-          const up3 = await supabase.from("vendors").update({ password: np }).eq("email", email);
+          const up3 = await supabase.from("vendors").update({ password: hashed }).eq("email", email);
           if (up3.error) throw new Error(up3.error.message);
           if ((up3.count || 0) === 0) throw new Error("No account found for this email.");
         }
@@ -2569,30 +2612,39 @@ function DashboardPage({ bills, tasks, workers, vendors, billPayments, totalReve
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-function SettingsPage({ brand, setBrand, showToast, adminPassword, changeAdminPassword, workers, setWorkers, user }) {
+function SettingsPage({ brand, setBrand, showToast, workers, setWorkers, user }) {
   const [f, setF] = useState({ ...brand });
   useEffect(() => { setF({ ...brand }); }, [brand]);
   const logoRef = useRef(); const qrRef = useRef(); const a4PreviewRef = useRef(null);
   const bgImageRef = useRef();
   const [passForm, setPassForm] = useState({ current:"", newPass:"", confirm:"" });
   const [passErr, setPassErr] = useState("");
+  const [passLoading, setPassLoading] = useState(false);
 
   const changeMyPassword = async () => {
     setPassErr("");
     if (!passForm.current || !passForm.newPass || !passForm.confirm) return setPassErr("All fields required.");
     if (passForm.newPass !== passForm.confirm) return setPassErr("New passwords don't match.");
     if (passForm.newPass.length < 4) return setPassErr("Password must be at least 4 characters.");
-    if (user.role === "admin") {
-      if (passForm.current !== adminPassword) return setPassErr("Current password is incorrect.");
-      changeAdminPassword(passForm.newPass);
-    } else {
-      const worker = workers.find(w => w.id === user.id);
-      if (!worker || passForm.current !== worker.password) return setPassErr("Current password is incorrect.");
-      await db.updateWorkerPassword(user.id, passForm.newPass);
-      setWorkers(ws => ws.map(w => w.id === user.id ? {...w, password: passForm.newPass} : w));
+    setPassLoading(true);
+    try {
+      // Verify current password via server-side auth (no plaintext comparison on client)
+      const verified = await db.loginWithCredentials(user.username, passForm.current);
+      if (!verified) { setPassErr("Current password is incorrect."); return; }
+      // Update password in the correct table based on role
+      if (user.role === "admin") {
+        await db.updateOrgAdminPassword(user.id, passForm.newPass);
+      } else {
+        await db.updateWorkerPassword(user.id, passForm.newPass);
+      }
+      setPassForm({ current: "", newPass: "", confirm: "" });
+      showToast("✅ Password changed successfully!");
+    } catch (e) {
+      setPassErr("Failed to change password. Try again.");
+      console.error("changeMyPassword:", e);
+    } finally {
+      setPassLoading(false);
     }
-    setPassForm({ current:"", newPass:"", confirm:"" });
-    showToast("✅ Password changed successfully!");
   };
 
   const handleLogo = async (e) => { const file = e.target.files[0]; if (!file) return; setF(x => ({ ...x, logo: null })); const b64 = await readFile64(file); setF(x => ({ ...x, logo: b64 })); };

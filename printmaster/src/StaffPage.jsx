@@ -135,9 +135,14 @@ export default function StaffPage({ workers, vendors, setWorkers, tasks, showToa
   };
 
   const removeWorker = async (id) => {
-    setWorkers(ws=>ws.filter(x=>x.id!==id));
-    if(selectedStaff?.id===id) setSelectedStaff(null);
-    await db.deleteWorker(id);
+    // Task 3.3 – check DB response before touching local state
+    const err = await db.deleteWorker(id);
+    if (err) {
+      showToast("Failed to remove staff: " + (err.message || "Unknown error"), "error");
+      return;
+    }
+    setWorkers(ws => ws.filter(x => x.id !== id));
+    if (selectedStaff?.id === id) setSelectedStaff(null);
     showToast("Removed");
   };
 
@@ -396,13 +401,19 @@ function StaffProfile({ staff, onBack, showToast, organisationId }) {
   const [paymentModal, setPaymentModal] = useState(false);
   const [paymentForm, setPaymentForm]   = useState({ amount:"", type:"Payment", note:"" });
   const [slipModal, setSlipModal]       = useState(false);
+  const [isLoading, setIsLoading]       = useState(false); // Task 4.4 – loading indicator
 
   useEffect(() => { loadData(); }, [staff.id]);
 
   const loadData = async () => {
-    const att = await db.getWorkerAttendance(staff.id);
-    const txn = await db.getWorkerTransactions(staff.id);
-    setAttendance(att); setTransactions(txn);
+    setIsLoading(true);
+    try {
+      const att = await db.getWorkerAttendance(staff.id);
+      const txn = await db.getWorkerTransactions(staff.id);
+      setAttendance(att); setTransactions(txn);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const days = new Date(year, month+1, 0).getDate();
@@ -425,16 +436,18 @@ function StaffProfile({ staff, onBack, showToast, organisationId }) {
     return {p,a,hd,pl,wo};
   }, [currentMonthAttendance]);
 
-  const setStatus = async (day, status) => {
+  // Task 5.3 – useCallback: stable references for handlers passed to O(days)
+  // calendar cells — prevents each cell re-rendering on every parent state change.
+  const setStatus = useCallback(async (day, status) => {
     const dt = new Date(year, month, day);
     const dateStr = [dt.getFullYear(), String(dt.getMonth()+1).padStart(2,"0"), String(dt.getDate()).padStart(2,"0")].join("-");
     const update = { worker_id:staff.id, organisation_id:organisationId, date:dateStr, status };
     setAttendance(prev => [...prev.filter(a=>a.date!==dateStr), update]);
     await db.upsertWorkerAttendance([update]);
-  };
+  }, [year, month, staff.id, organisationId]);
 
-  const prevMonth = () => { if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1); };
-  const nextMonth = () => { if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1); };
+  const prevMonth = useCallback(() => { if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1); }, [month]);
+  const nextMonth = useCallback(() => { if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1); }, [month]);
 
   const runningBalance = useMemo(() => {
     let bal = Number(staff.opening_balance||0);
@@ -463,6 +476,16 @@ function StaffProfile({ staff, onBack, showToast, organisationId }) {
 
   return (
     <div style={{ minHeight:"100vh", background:"#f8f9fa" }}>
+      {/* Task 4.4 – Loading skeleton while attendance/transactions fetch */}
+      {isLoading && (
+        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", minHeight:200 }}>
+          <div style={{
+            width:40, height:40, borderRadius:"50%",
+            border:"3px solid #e5e7eb", borderTopColor:"#4f46e5",
+            animation:"spin 0.8s linear infinite"
+          }} />
+        </div>
+      )}
 
       {/* ── Profile Header ── */}
       <div style={{ background:"#fff", borderRadius:16, padding:"20px 24px", boxShadow:"0 2px 12px rgba(0,0,0,0.06)", marginBottom:16 }}>
