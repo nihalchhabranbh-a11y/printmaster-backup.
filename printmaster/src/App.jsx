@@ -17,13 +17,6 @@ import LiveAlertsPage from "./LiveAlertsPage.jsx";
 import StaffPage from "./StaffPage.jsx";
 import VoiceAssistant from "./VoiceAssistant.jsx";
 
-// ── In-memory store ───────────────────────────────────────────────────────────
-// Super Admin (no organisation) – your personal login
-const ADMIN = { username: "Nihal", password: "Nihal676", role: "admin", name: "Nihal" };
-const WORKERS_INIT = [
-  { id: "w1", username: "ravi", password: "ravi123", name: "Ravi Kumar", role: "worker" },
-  { id: "w2", username: "sunita", password: "sunita123", name: "Sunita Devi", role: "worker" },
-];
 
 // ── Default brand/settings (hard-coded for live use) ─────────────────────────
 // These values are used both as in-memory defaults and as the base when
@@ -1254,14 +1247,6 @@ export default function App() {
   const [organisations, setOrganisations] = useState([]);
   const [approvedOrganisations, setApprovedOrganisations] = useState([]); // kept for compatibility (no longer used by LoginPage)
   const [products, setProducts] = useState([]);
-  // Admin password lives only in React state (no localStorage)
-  const [adminPassword, setAdminPassword] = useState(ADMIN.password);
-  const changeAdminPassword = (newPass) => {
-    setAdminPassword(newPass);
-    try {
-      localStorage.setItem("pm_admin_password", newPass);
-    } catch {}
-  };
 
   const defaultPageForRole = (role, organisationId) => {
     if (role === "vendor") return "vendor-dashboard";
@@ -1270,20 +1255,17 @@ export default function App() {
     return "dashboard";
   };
 
-  // Restore logged-in user + super-admin password from localStorage (so refresh doesn't log out/reset)
+  // Restore logged-in user from localStorage (so refresh doesn't log out)
   useEffect(() => {
     try {
-      const savedAdminPass = localStorage.getItem("pm_admin_password");
-      if (savedAdminPass) {
-        setAdminPassword(savedAdminPass);
-      }
+      // Clean up legacy admin password key if present
+      localStorage.removeItem("pm_admin_password");
 
       const raw = localStorage.getItem("pm_user");
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && parsed.username && parsed.role) {
           setUser(parsed);
-          const nextPage = defaultPageForRole(parsed.role, parsed.organisationId ?? null);
           setPage(defaultPageForRole(parsed.role, parsed.organisationId ?? null));
         }
       }
@@ -1802,7 +1784,12 @@ export default function App() {
             })}
           </nav>
           <div className="s-footer">
-            <div className="user-chip" onClick={() => { setUser(null); localStorage.removeItem("pm_user"); setPage("dashboard"); }}>
+            <div className="user-chip" onClick={() => {
+              setUser(null);
+              localStorage.removeItem("pm_user");
+              localStorage.removeItem("pm_admin_password");
+              setPage("dashboard");
+            }}>
               <div className="u-av">{user.name[0]}</div>
               <div className="flex-1"><div className="u-name">{user.name}</div><div className="u-role">{user.role === "admin" ? "Administrator" : user.role === "vendor" ? "Vendor" : "Worker"}</div></div>
               <Icon name="logout" size={14} color="var(--text3)" />
@@ -2081,7 +2068,7 @@ function LoginPage({ brand, adminPassword, onLogin }) {
     setLoading(true);
     setErr("");
     try {
-      const u = await db.loginWithCredentials(form.username, form.password, adminPassword);
+      const u = await db.loginWithCredentials(form.username, form.password);
       if (u) {
         onLogin(u);
       } else {
@@ -2237,14 +2224,16 @@ function LoginPage({ brand, adminPassword, onLogin }) {
     setLoading(true);
     setErr("");
     try {
-      // Update password in app tables where email matches (org_admins > workers > vendors).
-      const up1 = await supabase.from("org_admins").update({ password: np }).eq("email", email);
+      // Hash the new password server-side before writing to any table
+      const { hashPasswordForStorage } = await import("./supabase.js");
+      const hashed = await hashPasswordForStorage(np);
+      const up1 = await supabase.from("org_admins").update({ password: hashed }).eq("email", email);
       if (up1.error) throw new Error(up1.error.message);
       if ((up1.count || 0) === 0) {
-        const up2 = await supabase.from("workers").update({ password: np }).eq("email", email);
+        const up2 = await supabase.from("workers").update({ password: hashed }).eq("email", email);
         if (up2.error) throw new Error(up2.error.message);
         if ((up2.count || 0) === 0) {
-          const up3 = await supabase.from("vendors").update({ password: np }).eq("email", email);
+          const up3 = await supabase.from("vendors").update({ password: hashed }).eq("email", email);
           if (up3.error) throw new Error(up3.error.message);
           if ((up3.count || 0) === 0) throw new Error("No account found for this email.");
         }
