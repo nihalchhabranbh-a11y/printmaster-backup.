@@ -367,8 +367,11 @@ export default function EnhancedCustomersPage({ customers, setCustomers, bills, 
     return map;
   }, [mergedCustomers, bills, billPayments]);
 
-  // Helper: look up pre-computed balance — O(1) per call
-  const getBalance = (party) => balanceMap.get(party.id || party.phone || party.name) || { finalDue: 0, balanceType: "to_collect" };
+  // Helper: look up pre-computed balance - O(1) per call
+  const getBalance = useCallback(
+    (party) => balanceMap.get(party.id || party.phone || party.name) || { finalDue: 0, balanceType: "to_collect" },
+    [balanceMap]
+  );
 
   // Table sorted data
   const sortedFiltered = useMemo(() => {
