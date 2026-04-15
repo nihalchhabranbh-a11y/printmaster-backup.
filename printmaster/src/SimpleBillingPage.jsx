@@ -456,10 +456,8 @@ export default function SimpleBillingPage({
       organisationId: user?.organisationId,
     };
     setIsSaving(true); // Task 3.1
-    let saved = null;
     try {
-    const saved2 = await db.addBill(bill);
-    saved = saved2;
+      const saved = await db.addBill(bill);
     if (!saved) {
       showToast("Failed to save bill. Does it have too many complex items or invalid data?", "error");
       return; // Stop execution so the modal stays open with the error visible
