@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1025"/>
+      <stop offset="0.42" stop-color="#120A2A"/>
+      <stop offset="1" stop-color="#050816"/>
+    </linearGradient>
+    <radialGradient id="b1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(380 210) rotate(35) scale(680 420)">
+      <stop stop-color="#4F67FF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#4F67FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="b2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1260 260) rotate(-12) scale(740 460)">
+      <stop stop-color="#7C3AED" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#7C3AED" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="b3" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1080 760) rotate(0) scale(820 520)">
+      <stop stop-color="#06B6D4" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#06B6D4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-200" y="-200" width="2000" height="1300" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+    <filter id="grain" x="0" y="0" width="1600" height="900" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" />
+      <feColorMatrix type="matrix" values="
+        0 0 0 0 0
+        0 0 0 0 0
+        0 0 0 0 0
+        0 0 0 .10 0" />
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <g filter="url(#blur)">
+    <path d="M-80 210C240 90 400 60 690 120C980 180 1040 100 1260 70C1480 40 1660 110 1720 200V560C1520 650 1350 660 1120 630C890 600 760 710 520 770C280 830 70 770 -80 700V210Z" fill="rgba(255,255,255,0.06)"/>
+    <ellipse cx="380" cy="210" rx="680" ry="420" fill="url(#b1)"/>
+    <ellipse cx="1260" cy="260" rx="740" ry="460" fill="url(#b2)"/>
+    <ellipse cx="1080" cy="760" rx="820" ry="520" fill="url(#b3)"/>
+  </g>
+
+  <!-- soft store light streaks -->
+  <path d="M210 150H740" stroke="rgba(226,232,240,0.08)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M250 230H860" stroke="rgba(226,232,240,0.06)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M980 170H1420" stroke="rgba(226,232,240,0.05)" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- grain -->
+  <rect width="1600" height="900" filter="url(#grain)" opacity="0.35"/>
+</svg>
+
